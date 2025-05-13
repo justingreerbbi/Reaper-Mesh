@@ -36,10 +36,8 @@ AT Commands
 
 AT
 
-AT+MSG= TEXT
-AT+CH=1-7
-AT+SET=DEVICE_NAME NinaMesh1
-AT+MSG= GPS|HELTECV3|41.02343,-81.73141|1
+AT+MSG=Hello from node!
+AT+NAME=NinaNode02
 
 ```cpp
 // Example usage

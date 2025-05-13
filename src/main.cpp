@@ -1,16 +1,18 @@
 #include <RadioLib.h>
 #include <EEPROM.h>
+#include <vector>
 
 #define EEPROM_SIZE 128
+#define MAX_HOPS 3
+#define ROUTE_TABLE_SIZE 20  // Max number of recent messages to track
 
 // EEPROM Offsets
 #define ADDR_MAGIC        0
 #define ADDR_DEVICE_NAME  4
 #define ADDR_CHANNEL      36
-
 #define EEPROM_MAGIC      0x42
 
-// LoRa parameters
+// LoRa Parameters
 #define BANDWIDTH 500
 #define SPREADING_FACTOR 7
 #define CODING_RATE 5
@@ -18,18 +20,32 @@
 #define SYNC_WORD 0x12
 #define TX_POWER 14
 
-// LoRa module for Heltec V3 (SX1262)
+// LoRa Module for Heltec V3 (SX1262)
 SX1262 lora = new Module(8, 14, 12, 13);
 
-// Channel list (902 MHz band)
+// Channel list
 float channels[] = {902.0, 904.0, 908.0, 910.0, 912.0, 914.0, 915.0};
 const int numChannels = sizeof(channels) / sizeof(channels[0]);
 
-// Stored settings
+// Device and state
 char deviceName[32] = "NinaMesh1";
 int currentChannel = 1;
 
-// Save settings to EEPROM
+// Message tracking
+unsigned long lastSendTime = 0;
+const unsigned long ackTimeout = 1000;
+const int MAX_RETRIES = 3;
+
+bool awaitingAck = false;
+int retryCount = 0;
+int currentMsgId = 0;
+char pendingMessage[128];
+
+// Routing table to prevent rebroadcast loops
+std::vector<String> routeTable;
+
+// ==== Settings Persistence ====
+
 void saveSettings() {
   EEPROM.write(ADDR_MAGIC, EEPROM_MAGIC);
   EEPROM.put(ADDR_DEVICE_NAME, deviceName);
@@ -37,29 +53,10 @@ void saveSettings() {
   EEPROM.commit();
 }
 
-// Initialize LoRa module
-void setupLoRa() {
-  int state = lora.begin(channels[currentChannel - 1], BANDWIDTH);
-  lora.setSpreadingFactor(SPREADING_FACTOR);
-  lora.setCodingRate(CODING_RATE);
-  lora.setPreambleLength(PREAMBLE_LENGTH);
-  lora.setSyncWord(SYNC_WORD);
-  lora.setOutputPower(TX_POWER);
-
-  if (state == RADIOLIB_ERR_NONE) {
-    Serial.println("LoRa RX ready");
-  } else {
-    Serial.print("LoRa init failed: ");
-    Serial.println(state);
-    while (true);
-  }
-}
-
-// Load settings from EEPROM
 void loadSettings() {
   EEPROM.begin(EEPROM_SIZE);
   if (EEPROM.read(ADDR_MAGIC) != EEPROM_MAGIC) {
-    strcpy(deviceName, "Device1");
+    strcpy(deviceName, "Device223");
     currentChannel = 1;
     saveSettings();
     return;
@@ -70,115 +67,222 @@ void loadSettings() {
     currentChannel = 1;
 }
 
-/**
- * @brief Initializes the system setup.
- * 
- * This function performs the following tasks:
- * 1. Initializes the serial communication at a baud rate of 115200.
- * 2. Waits for the serial connection to be established.
- * 3. (Commented out) Contains logic for a handshake mechanism with the system:
- *    - Sends a "WAITING_FOR_CONNECTION" message.
- *    - Waits for up to 30 seconds for a "HELLO_PC" message from the system.
- *    - Responds with "HELLO_DEVICE" upon receiving the handshake message.
- * 4. Loads device settings using the `loadSettings()` function.
- * 5. Logs the initialization of the LoRa module, including the device name and current channel.
- * 6. Sets up the LoRa module using the `setupLoRa()` function.
- */
-void setup() {
-  Serial.begin(115200);
+// ==== LoRa Setup ====
 
-  while (!Serial); // Wait for serial connection
+void setupLoRa() {
+  int state = lora.begin(channels[currentChannel - 1], BANDWIDTH);
+  lora.setSpreadingFactor(SPREADING_FACTOR);
+  lora.setCodingRate(CODING_RATE);
+  lora.setPreambleLength(PREAMBLE_LENGTH);
+  lora.setSyncWord(SYNC_WORD);
+  lora.setOutputPower(TX_POWER);
+  //lora.setHeaderType(RADIOLIB_SX126X_HEADER_EXPLICIT);
+  //lora.setRxTimeout(500);
 
-  // Wait for the handshake from the system.
-  /*Serial.println("WAITING_FOR_CONNECTION");
-  unsigned long start = millis();
-  while (millis() - start < 30000) { // Second 30 second timeout
-    if (Serial.available()) {
-      String line = Serial.readStringUntil('\n');
-      line.trim();
-      if (line == "HELLO_PC") {
-        Serial.println("HELLO_DEVICE");
-        break;
-      }
-    }
-  }*/
-
-  loadSettings();
-
-  Serial.print("LoRa Init (");
-  Serial.print(deviceName);
-  Serial.print(", Channel ");
-  Serial.print(currentChannel);
-  Serial.println(")");
-
-  setupLoRa();
+  if (state == RADIOLIB_ERR_NONE) {
+    Serial.println("LoRa RX ready");
+  } else {
+    Serial.print("LoRa init failed: ");
+    Serial.println(state);
+    while (true);
+  }
 }
 
-void sendMessage(const char* deviceName, const char* message) {
-  char formattedMessage[128];
-  snprintf(formattedMessage, sizeof(formattedMessage), "MSG|%s|%s|1", deviceName, message);
+// ==== Message Sending ====
 
-  int state = lora.transmit((uint8_t*)formattedMessage, strlen(formattedMessage));
+void sendMessage(const char* deviceName, const char* message) {
+  currentMsgId++;
+  snprintf(pendingMessage, sizeof(pendingMessage), "MSG|%s|%s|%d", deviceName, message, currentMsgId);
+
+  int state = lora.transmit((uint8_t*)pendingMessage, strlen(pendingMessage));
   if (state == RADIOLIB_ERR_NONE) {
-    Serial.println("Message sent successfully");
+    Serial.print("Message sent: ");
+    Serial.println(pendingMessage);
+    lastSendTime = millis();
+    awaitingAck = true;
+    retryCount = 0;
   } else {
     Serial.print("Transmit failed: ");
     Serial.println(state);
   }
+
+  delay(200);  // Allow RX switch
 }
 
-/**
- * Process AT commands.
- */
+// ==== Duplicate Message Tracking ====
+
+String getMessageKey(const char* origin, int msgId) {
+  return String(origin) + "|" + String(msgId);
+}
+
+void addToRouteTable(const String& key) {
+  if (routeTable.size() >= ROUTE_TABLE_SIZE) {
+    routeTable.erase(routeTable.begin());  // Remove oldest
+  }
+  routeTable.push_back(key);
+}
+
+bool isDuplicate(const String& key) {
+  for (const String& entry : routeTable) {
+    if (entry == key) return true;
+  }
+  return false;
+}
+
+// ==== Forwarding ====
+
+void forwardMessage(const char* type, const char* origin, const char* content, int hops, int msgId) {
+  if (strcmp(origin, deviceName) == 0) return;
+  if (hops >= MAX_HOPS) return;
+
+  String key = getMessageKey(origin, msgId);
+  if (isDuplicate(key)) return;
+
+  char forward[128];
+  snprintf(forward, sizeof(forward), "%s|%s|%s|%d", type, origin, content, hops + 1);
+
+  int state = lora.transmit((uint8_t*)forward, strlen(forward));
+  if (state == RADIOLIB_ERR_NONE) {
+    Serial.print("Forwarded: ");
+    Serial.println(forward);
+    addToRouteTable(key);
+  } else {
+    Serial.print("Forward failed: ");
+    Serial.println(state);
+  }
+
+  delay(200);
+}
+
+// ==== AT Command Handling ====
+
 void processATCommand(String command) {
   if (command == "AT") {
     Serial.println("OK");
+
   } else if (command.startsWith("AT+MSG=")) {
     String message = command.substring(8);
     sendMessage(deviceName, message.c_str());
+
+  } else if (command.startsWith("AT+NAME=")) {
+    String newName = command.substring(8);
+    if (newName.length() < sizeof(deviceName)) {
+      newName.toCharArray(deviceName, sizeof(deviceName));
+      saveSettings();
+      Serial.print("Device name updated to: ");
+      Serial.println(deviceName);
+      Serial.println("Rebooting...");
+      delay(500);
+      ESP.restart();  // For ESP32-based boards
+    } else {
+      Serial.println("Name too long.");
+    }
+
   } else {
     Serial.println("ERROR");
   }
 }
 
+
+// ==== Message Parsing ====
+
 void parseReceivedMessage(const char* message) {
-  // Example: MSG|DeviceName|Hello World|1
-  // Example: GPS|DeviceName|LAT:12.3334,LNG:-18.3434|1
-  // The first part is the type of message, the second part is the device name, and the third part is the content and the last is the number of hops.
-  char type[16], name[32], content[128];
+  char type[16], origin[32], content[128];
   int hops;
-  sscanf(message, "%15[^|]|%31[^|]|%127[^|]|%d", type, name, content, &hops);
-  Serial.print("Type: ");
-  Serial.println(type);
-  Serial.print("Name: ");
-  Serial.println(name);
-  Serial.print("Content: ");
-  Serial.println(content);
-  Serial.print("Hops: ");
-  Serial.println(hops);
+
+  sscanf(message, "%15[^|]|%31[^|]|%127[^|]|%d", type, origin, content, &hops);
+
+  int msgId = 0;
+  sscanf(content, "%*[^[][%d]", &msgId);
+  if (msgId == 0) sscanf(message, "%*[^|]|%*[^|]|%*[^|]|%d", &msgId);
+
+  String key = getMessageKey(origin, msgId);
+  if (isDuplicate(key)) {
+    Serial.println("Duplicate ignored.");
+    return;
+  }
+
+  Serial.println("Message Received:");
+  Serial.print("Type: "); Serial.println(type);
+  Serial.print("From: "); Serial.println(origin);
+  Serial.print("Content: "); Serial.println(content);
+  Serial.print("Hops: "); Serial.println(hops);
+  Serial.print("MsgID: "); Serial.println(msgId);
+  Serial.println("--------------------");
+
+  addToRouteTable(key);
+
+  if (strcmp(type, "MSG") == 0 && strcmp(origin, deviceName) != 0) {
+    char ackMsg[64];
+    snprintf(ackMsg, sizeof(ackMsg), "ACK|%s|%d|1", deviceName, msgId);
+    lora.transmit((uint8_t*)ackMsg, strlen(ackMsg));
+    delay(200);
+
+    forwardMessage(type, origin, content, hops, msgId);
+  } else if (strcmp(type, "ACK") == 0) {
+    int ackId = atoi(content);
+    if (ackId == currentMsgId) {
+      Serial.println("ACK received");
+      awaitingAck = false;
+    }
+  }
 }
 
-/**
- * Main loop.
- */
-void loop() {
+// ==== Arduino Setup ====
 
-  // Handle incoming messages.
+void setup() {
+  Serial.begin(115200);
+  while (!Serial);
+
+  loadSettings();
+
+  Serial.print("🔧 Device: ");
+  Serial.println(deviceName);
+  Serial.print("📡 Channel: ");
+  Serial.println(currentChannel);
+
+  setupLoRa();
+}
+
+// ==== Main Loop ====
+
+void loop() {
   uint8_t buf[64];
   int state = lora.receive(buf, sizeof(buf));
+
   if (state == RADIOLIB_ERR_NONE) {
     Serial.println((char*)buf);
     parseReceivedMessage((char*)buf);
-    Serial.println("--------------------");
   } else if (state != RADIOLIB_ERR_RX_TIMEOUT) {
     Serial.print("Receive failed: ");
     Serial.println(state);
   }
 
-  // Handle incoming AT commands.
+  if (awaitingAck && millis() - lastSendTime > ackTimeout) {
+    retryCount++;
+    if (retryCount > MAX_RETRIES) {
+      Serial.println("No ACK. Giving up.");
+      awaitingAck = false;
+    } else {
+      Serial.println("Retrying...");
+      int txState = lora.transmit((uint8_t*)pendingMessage, strlen(pendingMessage));
+      if (txState == RADIOLIB_ERR_NONE) {
+        Serial.print("Resent: ");
+        Serial.println(pendingMessage);
+        lastSendTime = millis();
+      } else {
+        Serial.print("Retry failed: ");
+        Serial.println(txState);
+      }
+      delay(200);
+    }
+  }
+
   if (Serial.available()) {
     String command = Serial.readStringUntil('\n');
     command.trim();
     processATCommand(command);
   }
+
+  delay(10);
 }
