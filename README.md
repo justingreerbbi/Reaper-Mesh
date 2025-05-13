@@ -37,7 +37,7 @@ AT Commands
 AT
 
 AT+MSG=This is a test of plain text communication
-AT+NAME=NinaNode02
+AT+NAME=ReaperNodeDesktop
 
 ```cpp
 // Example usage
