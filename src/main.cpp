@@ -2,14 +2,15 @@
 
 SX1262 lora = new Module(8, 14, 12, 13);  // Heltec V3.2 SX1262 pins
 
-// LoRa parameters
-#define FREQUENCY       915.0
-#define BANDWIDTH       500.0
-#define SPREADING_FACTOR 7
-#define CODING_RATE     5
-#define PREAMBLE_LENGTH 8
-#define SYNC_WORD       0xF3
-#define TX_POWER        14
+#define FREQUENCY        915.0
+#define BANDWIDTH        500.0
+#define SPREADING_FACTOR 12
+#define CODING_RATE      5
+#define PREAMBLE_LENGTH  12
+#define SYNC_WORD        0xF3
+#define TX_POWER         14
+
+#define LED_PIN 25
 
 bool isWaiting = false;
 unsigned long lastSendTime = 0;
@@ -18,6 +19,11 @@ String lastSentMessage = "";
 void setup() {
   Serial.begin(115200);
   while (!Serial);
+
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+
+  randomSeed(esp_random());  // seed random for TX jitter
 
   Serial.println("BOOT|Starting LoRa init...");
 
@@ -33,11 +39,12 @@ void setup() {
 }
 
 void loop() {
-  // Check for serial input to trigger send
+  // === Serial command to trigger TX ===
   if (Serial.available()) {
     String input = Serial.readStringUntil('\n');
     input.trim();
     if (input.equalsIgnoreCase("SEND")) {
+      delay(random(50, 200));  // small backoff to avoid collision
       lastSentMessage = "Hello from board at " + String(millis());
       int state = lora.transmit(lastSentMessage);
       if (state == RADIOLIB_ERR_NONE) {
@@ -49,11 +56,11 @@ void loop() {
         Serial.print("ERR|TX_FAIL|");
         Serial.println(state);
       }
-      lora.startReceive();
+      lora.startReceive();  // resume RX after TX
     }
   }
 
-  // Listen for incoming messages
+  // === Listen for incoming packets ===
   uint8_t buf[128];
   int state = lora.receive(buf, sizeof(buf));
   if (state == RADIOLIB_ERR_NONE) {
@@ -63,7 +70,13 @@ void loop() {
     Serial.print(lora.getRSSI());
     Serial.print(" dBm | SNR=");
     Serial.println(lora.getSNR());
-    lora.startReceive();
+
+    // 🔦 Flash LED
+    digitalWrite(LED_PIN, HIGH);
+    delay(100);
+    digitalWrite(LED_PIN, LOW);
+
+    lora.startReceive();  // resume RX
     isWaiting = false;
   } else if (state != RADIOLIB_ERR_RX_TIMEOUT) {
     Serial.print("ERR|RX_FAIL|");
@@ -71,8 +84,8 @@ void loop() {
     lora.startReceive();
   }
 
-  // Optional: timeout for ACK-style response (5s max)
-  if (isWaiting && millis() - lastSendTime > 5000) {
+  // === Optional: timeout if expecting reply ===
+  if (isWaiting && millis() - lastSendTime > 500) {
     Serial.println("RECV|TIMEOUT");
     isWaiting = false;
   }
