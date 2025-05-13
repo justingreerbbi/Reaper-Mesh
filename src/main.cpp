@@ -294,5 +294,5 @@ void loop() {
     processATCommand(command);
   }
 
-  delay(10);
+  //delay(10); // This may ibe causing issues with the LoRa module. Adjust as needed.
 }
