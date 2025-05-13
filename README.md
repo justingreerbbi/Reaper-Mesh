@@ -36,7 +36,8 @@ AT Commands
 
 AT
 
-AT+MSG=This is a test of plain text communication
+AT+MSG=FromDesktop
+AT+MSG=FromLaptop
 AT+NAME=ReaperNodeDesktop
 
 ```cpp
