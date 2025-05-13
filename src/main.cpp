@@ -74,11 +74,13 @@ void setupLoRa() {
 
   if (state == RADIOLIB_ERR_NONE) {
     Serial.println("LOG|INIT|LoRa RX ready");
+    lora.startReceive();  // <== persistent RX
   } else {
     Serial.printf("ERR|INIT_FAILED|Code=%d\n", state);
     while (true);
   }
 }
+
 
 // ==== Routing Table ====
 String getMessageKey(const char* origin, int msgId) {
@@ -162,7 +164,7 @@ void processATCommand(String command) {
   if (command == "AT") {
     Serial.println("OK");
   } else if (command.startsWith("AT+MSG=")) {
-    String message = command.substring(8);
+    String message = command.substring(7);
     sendMessage(deviceName, message.c_str());
   } else if (command.startsWith("AT+NAME=")) {
     String newName = command.substring(8);
@@ -186,15 +188,15 @@ void sendMessage(const char* from, const char* message) {
   currentMsgId++;
   snprintf(pendingMessage, sizeof(pendingMessage), "MSG|%s|%s|%d", from, message, currentMsgId);
 
-  int state = lora.transmit((uint8_t*)pendingMessage, strlen(pendingMessage));
-  if (state == RADIOLIB_ERR_NONE) {
+  int txState = lora.transmit((uint8_t*)pendingMessage, strlen(pendingMessage));
+  if (txState == RADIOLIB_ERR_NONE) {
     Serial.printf("LOG|MSG_SENT|%s\n", pendingMessage);
     awaitingAck = true;
     retryCount = 0;
     lastAckWaitStart = millis();
-    lastSendTime = millis();
-  } else {
-    Serial.printf("ERR|TX_FAIL|Code=%d\n", state);
+    lora.startReceive();  // <== go back to RX
+  }else {
+    Serial.printf("ERR|TX_FAIL|Code=%d\n", txState);
   }
 }
 
@@ -210,43 +212,38 @@ void setup() {
 
 // ==== Main Loop ====
 void loop() {
-  // === Simulated RX Window ===
-  uint8_t buf[64];
-  unsigned long rxStart = millis();
-  bool gotMessage = false;
-
-  while (millis() - rxStart < 200) {  // Simulate 200ms RX timeout window
-    int state = lora.receive(buf, sizeof(buf));
+  // === Check for incoming packets using non-blocking receive ===
+  if (lora.available()) {
+    String msg;
+    int state = lora.readData(msg);
     if (state == RADIOLIB_ERR_NONE) {
-      parseReceivedMessage((char*)buf);
-      gotMessage = true;
-      break;
-    } else if (state != RADIOLIB_ERR_RX_TIMEOUT) {
-      Serial.printf("ERR|RECV_FAIL|Code=%d\n", state);
-      break;
+      parseReceivedMessage(msg.c_str());
+    } else {
+      Serial.printf("ERR|READ_FAIL|Code=%d\n", state);
     }
   }
 
-  // === Retry Logic for Awaiting ACK ===
+  // === Retry logic for awaiting ACK ===
   if (awaitingAck && millis() - lastAckWaitStart > ackTimeout) {
     retryCount++;
     if (retryCount > MAX_RETRIES) {
       Serial.printf("ACK|FAIL|ID=%d|Retries=%d\n", currentMsgId, retryCount);
       awaitingAck = false;
     } else {
-      delay(random(100, 300));  // Random backoff to reduce collisions
+      delay(random(100, 300));  // random backoff
       Serial.printf("ACK|RETRY|%d/%d\n", retryCount, MAX_RETRIES);
       int txState = lora.transmit((uint8_t*)pendingMessage, strlen(pendingMessage));
       if (txState == RADIOLIB_ERR_NONE) {
         Serial.printf("LOG|MSG_RESENT|%s\n", pendingMessage);
         lastAckWaitStart = millis();
+        lora.startReceive();  // <== ensure RX resumes after TX
       } else {
         Serial.printf("ERR|RETRY_TX_FAIL|Code=%d\n", txState);
       }
     }
   }
 
-  // === AT Command Interface ===
+  // === AT Command interface ===
   if (Serial.available()) {
     String command = Serial.readStringUntil('\n');
     command.trim();
