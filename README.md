@@ -39,6 +39,7 @@ AT
 AT+MSG=FromDesktop
 AT+MSG=FromLaptop
 AT+NAME=ReaperNodeDesktop
+AT+NAME=ReaperNodeLaptop
 
 ```cpp
 // Example usage
