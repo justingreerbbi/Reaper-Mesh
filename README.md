@@ -79,14 +79,30 @@ AT+GPS=latitude,longitude
 
 ## Features
 
--   AES-encrypted long-range LoRa communication
--   Compact binary protocol with automatic fragmentation
--   Simple serial `AT+` command interface
--   Currently supports Heltec WiFi LoRa 32 V3 (SX1262)
--   No external libraries required for parsing
--   Designed for off-grid, tactical, or remote operations
+-   AES-encrypted messages.
+-   Binary Fragmentation is used to be able to transmit data over the noraml limits of LoRa. 
+-   Simple serial `AT+` command interface with formatted responses for software integration.
+-   Integrated retry system until at least one node acknowledges the message.
+
+**Upcoming**
+
+- Low-power mode.
+- Multiple channel support.
+- Direct messaging.
+- Multiple node tracking.
+- OLED Information.
+- Ability to change settings including encryption keys.
+- Built in wireless Access Point with REST API and user interface.
+- Ability to load channel and keys via SD card (requires hardware development).
+- BLE connectivity with custom mobile application.
 
 ---
+
+## How to use
+
+This firmware provides no user interface to the device currently. Everything is done via Serail commuinications on Buadrate 115200. Connecting to the device can be done via a USB cable or through serial connections from another MCU.
+
+As the project becomes more stable, I will be adding more ways to take advantage of the communication between nodes.
 
 ## Installation
 

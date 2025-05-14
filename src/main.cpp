@@ -180,6 +180,23 @@ void sendEncryptedText(String msg) {
 }
 
 // Handles received fragments or ACK_CONFIRM
+/**
+ * @brief Processes an incoming data fragment buffer, handling both text message fragments and ACK confirmations.
+ *
+ * This function decrypts the provided buffer, determines the fragment type, and processes it accordingly:
+ * - For text fragments, it reconstructs multi-part messages, tracks received parts, and assembles the full message
+ *   when all fragments are received. It also sends an ACK_CONFIRM response upon complete reception.
+ * - For ACK_CONFIRM fragments, it acknowledges the receipt by toggling an LED and marking the corresponding outgoing
+ *   message fragments as acknowledged.
+ *
+ * @param buf Pointer to the buffer containing the incoming fragment data. The buffer is expected to be at least
+ *            AES_BLOCK_LEN bytes long and encrypted.
+ *
+ * @note Relies on global variables and objects such as `incoming`, `outgoing`, `lora`, and constants like
+ *       `TYPE_TEXT_FRAGMENT`, `TYPE_ACK_CONFIRM`, `AES_BLOCK_LEN`, and `LED_PIN`.
+ * @note Uses Serial for debug output and assumes the existence of helper functions such as `decryptFragment`,
+ *       `encryptFragment`, and `isRecentMessage`.
+ */
 void processFragment(uint8_t* buf) {
   decryptFragment(buf);
   uint8_t type = buf[0];
@@ -337,6 +354,7 @@ void setup() {
   }
 
   display.clearDisplay();
+
   // Reaper logo and text
   display.fillCircle(64, 24, 12, SSD1306_WHITE);
   display.fillCircle(64, 27, 12, SSD1306_BLACK);
