@@ -30,16 +30,13 @@
 
 // Fragmentation & retry config
 #define MAX_RETRIES      1
-#define RETRY_INTERVAL   1000 // ms between retries
+#define RETRY_INTERVAL   1000 // MS between retries
 #define FRAG_DATA_LEN    11   // Max plaintext bytes per fragment
 #define AES_BLOCK_LEN    16   // AES block size (bytes)
 
 // Packet type definitions
 #define TYPE_TEXT_FRAGMENT  0x03
-#define TYPE_ACK_FRAGMENT   0x04
-#define TYPE_REFRAGMENT_REQ 0x05
-#define TYPE_VERIFY_REQUEST 0x06
-#define TYPE_VERIFY_REPLY   0x07
+#define TYPE_ACK_FRAGMENT   0x04 // We need to remove this in the near future. It is not used.
 #define TYPE_ACK_CONFIRM    0x08
 
 // Message priority markers
@@ -59,7 +56,7 @@
 #define SCL_OLED_PIN 18
 #define SDA_OLED_PIN 17
 
-// Becon Config
+// Beacon Config
 #define BEACON_ENABLED true
 #define BEACON_INTERVAL 50000 // ms between beacons
 
