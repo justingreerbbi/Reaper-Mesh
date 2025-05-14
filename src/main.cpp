@@ -12,7 +12,6 @@
  * 
  * @param msg The plaintext message to send. If it starts with '!', it is sent as high priority.
  */
-void sendEncryptedText(String msg);
 #include <RadioLib.h>
 #include <Crypto.h>
 #include <AES.h>
@@ -33,7 +32,7 @@ void sendEncryptedText(String msg);
 #define SYNC_WORD        0xF3
 #define TX_POWER         22
 
-#define MAX_RETRIES      0
+#define MAX_RETRIES      1
 #define RETRY_INTERVAL   6000
 #define FRAG_DATA_LEN    11
 #define AES_BLOCK_LEN    16
@@ -99,7 +98,6 @@ std::map<String, unsigned long> recentMsgs;
 
 void processFragment(uint8_t* buf);
 void processAck(uint8_t* buf);
-void processConfirm(uint8_t* buf);
 
 String generateMsgID() {
   char buf[7];
@@ -127,27 +125,6 @@ void encryptFragment(uint8_t* input) {
 
 void decryptFragment(uint8_t* input) {
   aes.decryptBlock(input, input);
-}
-
-/**
- * @brief Sends a verification request for a specific message ID.
- * 
- * This function constructs a verification request packet, encrypts it,
- * and transmits it over LoRa. It also starts the receiving process
- * after sending.
- * 
- * @param msgId The message ID to verify.
- */
-void sendVerifyRequest(const String& msgId) {
-  uint8_t verify[AES_BLOCK_LEN] = {0};
-  verify[0] = TYPE_VERIFY_REQUEST;
-  verify[1] = (uint8_t)(strtoul(msgId.c_str(), NULL, 16) >> 8);
-  verify[2] = (uint8_t)(strtoul(msgId.c_str(), NULL, 16) & 0xFF);
-  encryptFragment(verify);
-  lora.transmit(verify, AES_BLOCK_LEN);
-  Serial.printf("VERIFY|SEND|%s\n", msgId.c_str());
-  delay(50);
-  lora.startReceive();
 }
 
 /**
@@ -208,40 +185,6 @@ void sendEncryptedText(String msg) {
   }
 
   outgoing[msgId] = frags;
-  //delay(1000);
-  //sendVerifyRequest(msgId);
-}
-
-/**
- * @brief Processes incoming confirmation messages.
- * 
- * This function handles the decryption of received confirmation messages,
- * checks their type, and updates the status of the corresponding
- * fragments in the outgoing map. It also manages the acknowledgment
- * of received fragments.
- * 
- * @note The function expects the incoming buffer to be already decrypted.
- * It checks the message type and processes it accordingly.
- * 
- * @param buf The buffer containing the incoming message.
- *            The first byte indicates the message type.
- *            The second and third bytes represent the message ID.
- * *          The next six bytes contain the result of the confirmation.
- *            The function prints the confirmation result to the serial output.
- */
-void processConfirm(uint8_t* buf) {
-  decryptFragment(buf);
-  if (buf[0] != TYPE_VERIFY_REPLY) return;
-
-  String msgId = String((buf[1] << 8) | buf[2], HEX);
-  char result[10] = {0};
-  memcpy(result, &buf[3], 6);
-  if (String(result) == "OK") {
-    Serial.printf("CONFIRM|OK|%s\n", msgId.c_str());
-    outgoing.erase(msgId);
-  } else {
-    Serial.printf("CONFIRM|MISSING|%s\n", msgId.c_str());
-  }
 }
 
 /**
@@ -275,9 +218,10 @@ void processFragment(uint8_t* buf) {
       msg.received.resize(total, false);
     }
     msg.received[seq] = true;
-
+    msgId.toUpperCase();
     Serial.printf("RECV|FRAG|%s|%d/%d\n", msgId.c_str(), seq + 1, total);
 
+    // @todo: WE need to clean this up becuase it is really not needed but break the confiormation if removed. Find out why.
     uint8_t ack[AES_BLOCK_LEN] = {0};
     ack[0] = TYPE_ACK_FRAGMENT;
     ack[1] = buf[1];
@@ -317,6 +261,7 @@ void processFragment(uint8_t* buf) {
       Serial.print("|");
       Serial.print(message);
       Serial.print("|");
+      msgId.toUpperCase();
       Serial.println(msgId);
 
       uint8_t ackConfirm[AES_BLOCK_LEN] = {0};
@@ -338,13 +283,19 @@ void processFragment(uint8_t* buf) {
     digitalWrite(LED_PIN, LOW);
 
     Serial.print("RECV|ACK_CONFIRM|");
-    String msgId = String((buf[1] << 8) | buf[2], HEX);
+    char msgIdBuf[5];
+    snprintf(msgIdBuf, sizeof(msgIdBuf), "%02X%02X", buf[1], buf[2]);
+    String msgId = String(msgIdBuf);
     msgId.toUpperCase();
     Serial.print(msgId);
     Serial.println();
 
-    // Set the retry flag for the message to false.
-    retry_flag = false;
+    auto it = outgoing.find(msgId);
+    if (it != outgoing.end()) {
+      for (auto& frag : it->second) {
+        frag.acked = true;
+      }
+    }
   }
 }
 
@@ -567,15 +518,7 @@ void loop() {
   uint8_t buf[128];
   int state = lora.receive(buf, sizeof(buf));
   if (state == RADIOLIB_ERR_NONE) {
-
-    // Check if the message is a fragment or an acknowledgment.
-    if (buf[0] == TYPE_ACK_FRAGMENT) {
-      processAck(buf);
-    } else if (buf[0] == TYPE_VERIFY_REPLY) {
-      processConfirm(buf);
-    } else {
-      processFragment(buf);
-    }
+    processFragment(buf);
     lora.startReceive();
   } else if (state != RADIOLIB_ERR_RX_TIMEOUT) {
     // Handle any errors that occur during reception.
