@@ -3,7 +3,6 @@
 #include <AES.h>
 #include <string.h>
 #include <vector>
-#include <deque>
 #include <map>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
@@ -39,20 +38,29 @@
 
 #define LED_PIN 35
 
-#define SCREEN_WIDTH 128 // OLED width
-#define SCREEN_HEIGHT 64 // OLED height
+#define SCREEN_WIDTH 128 // OLED display width, in pixels
+#define SCREEN_HEIGHT 64 // OLED display height, in pixels
 
 #define OLED_POWER_PIN 36
 #define RST_OLED_PIN 21
 #define SCL_OLED_PIN 18
 #define SDA_OLED_PIN 17
 
-// Fragment definition must come before usage
+SX1262 lora = new Module(8, 14, 12, 13);  // Heltec V3.2 pins
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, RST_OLED_PIN);
+
+char deviceName[16];
+AES128 aes;
+uint8_t aes_key[16] = {
+  0x60, 0x3D, 0xEB, 0x10, 0x15, 0xCA, 0x71, 0xBE,
+  0x2B, 0x73, 0xAE, 0xF0, 0x85, 0x7D, 0x77, 0x81
+};
+
 struct Fragment {
   uint8_t data[AES_BLOCK_LEN];
   int retries;
   unsigned long timestamp;
-  bool acked;
+  bool acked = false;
 };
 
 struct IncomingText {
@@ -62,22 +70,13 @@ struct IncomingText {
   std::vector<bool> received;
 };
 
-SX1262 lora = new Module(8, 14, 12, 13);
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, RST_OLED_PIN);
-
-char deviceName[16];
-AES128 aes;
-uint8_t aes_key[16] = {0x60,0x3D,0xEB,0x10,0x15,0xCA,0x71,0xBE,0x2B,0x73,0xAE,0xF0,0x85,0x7D,0x77,0x81};
-
-// Outgoing queue state
-std::deque<String> msgQueue;
-bool sending = false;
-String currentMsgId;
-std::vector<Fragment> currentFrags;
-unsigned long verifyTimestamp = 0;
-
+std::map<String, std::vector<Fragment>> outgoing;
 std::map<String, IncomingText> incoming;
 std::map<String, unsigned long> recentMsgs;
+
+void processFragment(uint8_t* buf);
+void processAck(uint8_t* buf);
+void processConfirm(uint8_t* buf);
 
 String generateMsgID() {
   char buf[7];
@@ -85,187 +84,264 @@ String generateMsgID() {
   return String(buf);
 }
 
-void encryptFragment(uint8_t* input) { aes.encryptBlock(input, input); }
-void decryptFragment(uint8_t* input) { aes.decryptBlock(input, input); }
-bool isRecentMessage(const String& msgId) {
+bool isRecentMessage(String msgId) {
   unsigned long now = millis();
-  for(auto it=recentMsgs.begin(); it!=recentMsgs.end();) {
-    if(now - it->second > BROADCAST_MEMORY_TIME) it = recentMsgs.erase(it);
-    else ++it;
+  for (auto it = recentMsgs.begin(); it != recentMsgs.end(); ) {
+    if (now - it->second > BROADCAST_MEMORY_TIME) {
+      it = recentMsgs.erase(it);
+    } else {
+      ++it;
+    }
   }
-  if(recentMsgs.count(msgId)) return true;
-  recentMsgs[msgId] = now; return false;
+  if (recentMsgs.find(msgId) != recentMsgs.end()) return true;
+  recentMsgs[msgId] = now;
+  return false;
 }
 
-// --- Sender FSM Functions ---
+void encryptFragment(uint8_t* input) {
+  aes.encryptBlock(input, input);
+}
+
+void decryptFragment(uint8_t* input) {
+  aes.decryptBlock(input, input);
+}
+
 void sendVerifyRequest(const String& msgId) {
-  uint8_t v[AES_BLOCK_LEN] = {0};
-  v[0] = TYPE_VERIFY_REQUEST;
-  v[1] = highByte((uint16_t)strtoul(msgId.c_str(), NULL, 16));
-  v[2] = lowByte((uint16_t)strtoul(msgId.c_str(), NULL, 16));
-  encryptFragment(v);
-  lora.transmit(v, AES_BLOCK_LEN);
+  uint8_t verify[AES_BLOCK_LEN] = {0};
+  verify[0] = TYPE_VERIFY_REQUEST;
+  verify[1] = (uint8_t)(strtoul(msgId.c_str(), NULL, 16) >> 8);
+  verify[2] = (uint8_t)(strtoul(msgId.c_str(), NULL, 16) & 0xFF);
+  encryptFragment(verify);
+  lora.transmit(verify, AES_BLOCK_LEN);
   Serial.printf("VERIFY|SEND|%s\n", msgId.c_str());
   delay(50);
   lora.startReceive();
-  verifyTimestamp = millis();
 }
 
-void startTransmission(const String& msg) {
-  bool highPriority = msg.startsWith("!");
-  String payload = highPriority ? msg.substring(1) : msg;
-  payload = String(deviceName) + "|" + payload;
-  currentMsgId = generateMsgID();
-  int total = (payload.length() + FRAG_DATA_LEN - 1) / FRAG_DATA_LEN;
-  currentFrags.clear();
-  for(int i=0;i<total;i++){
+void sendEncryptedText(String msg) {
+  bool highPriority = false;
+  if (msg.startsWith("!")) {
+    highPriority = true;
+    msg.remove(0, 1);
+  }
+
+  msg = String(deviceName) + "|" + msg;
+  std::vector<Fragment> frags;
+  String msgId = generateMsgID();
+  int total = (msg.length() + FRAG_DATA_LEN - 1) / FRAG_DATA_LEN;
+
+  delay(random(100, 400));  // initial jitter
+
+  for (int i = 0; i < total; i++) {
     uint8_t block[AES_BLOCK_LEN] = {0};
-    block[0] = highPriority?PRIORITY_HIGH:PRIORITY_NORMAL;
-    block[1] = highByte((uint16_t)strtoul(currentMsgId.c_str(),NULL,16));
-    block[2] = lowByte((uint16_t)strtoul(currentMsgId.c_str(),NULL,16));
-    block[3] = i;
-    block[4] = total;
-    String chunk = payload.substring(i*FRAG_DATA_LEN, min((i+1)*FRAG_DATA_LEN, (int)payload.length()));
+    block[0] = highPriority ? PRIORITY_HIGH : PRIORITY_NORMAL;
+    block[1] = (uint8_t)(strtoul(msgId.c_str(), NULL, 16) >> 8);
+    block[2] = (uint8_t)(strtoul(msgId.c_str(), NULL, 16) & 0xFF);
+    block[3] = (uint8_t)i;
+    block[4] = (uint8_t)total;
+
+    String chunk = msg.substring(i * FRAG_DATA_LEN, min((i + 1) * FRAG_DATA_LEN, (int)msg.length()));
     memcpy(&block[5], chunk.c_str(), chunk.length());
     encryptFragment(block);
-    Fragment f;
-    memcpy(f.data, block, AES_BLOCK_LEN);
-    f.retries = 0;
-    f.timestamp = millis();
-    f.acked = false;
-    currentFrags.push_back(f);
-    for(int r=0;r<2;r++){
-      if(lora.transmit(block,AES_BLOCK_LEN)==RADIOLIB_ERR_NONE)
-        Serial.printf("SEND|FRAG|%s|%d/%d|TRY=%d\n", currentMsgId.c_str(), i+1, total, r+1);
-      delay(50);
+
+    Fragment frag;
+    memcpy(frag.data, block, AES_BLOCK_LEN);
+    frag.retries = 0;
+    frag.timestamp = millis();
+    frags.push_back(frag);
+
+    for (int r = 0; r < 2; r++) {
+      int state = lora.transmit(block, AES_BLOCK_LEN);
+      if (state == RADIOLIB_ERR_NONE) {
+        Serial.printf("SEND|FRAG|%s|%d/%d|TRY=%d\n", msgId.c_str(), i + 1, total, r + 1);
+      } else {
+        Serial.print("ERR|TX_FAIL|");
+        Serial.println(state);
+      }
     }
   }
-  sending = true;
-  sendVerifyRequest(currentMsgId);
+
+  outgoing[msgId] = frags;
+  //delay(1000);
+  //sendVerifyRequest(msgId);
 }
 
-void maybeStartNext() {
-  if(!sending && !msgQueue.empty()){
-    String m = msgQueue.front(); msgQueue.pop_front();
-    startTransmission(m);
+void processConfirm(uint8_t* buf) {
+  decryptFragment(buf);
+  if (buf[0] != TYPE_VERIFY_REPLY) return;
+
+  String msgId = String((buf[1] << 8) | buf[2], HEX);
+  char result[10] = {0};
+  memcpy(result, &buf[3], 6);
+  if (String(result) == "OK") {
+    Serial.printf("CONFIRM|OK|%s\n", msgId.c_str());
+    outgoing.erase(msgId);
+  } else {
+    Serial.printf("CONFIRM|MISSING|%s\n", msgId.c_str());
   }
 }
 
-void handleSenderTimeout() {
-  if(sending && millis() - verifyTimestamp >= REQ_TIMEOUT) {
-    Serial.printf("VERIFY|TIMEOUT|%s\n", currentMsgId.c_str());
-    sending = false;
-  }
-}
-
-// --- Receiver Handlers ---
 void processFragment(uint8_t* buf) {
   decryptFragment(buf);
-  if((buf[0] & 0x0F) != TYPE_TEXT_FRAGMENT) return;
-  String mid = String((buf[1] << 8) | buf[2], HEX);
-  uint8_t seq = buf[3], tot = buf[4];
-  auto& it = incoming[mid];
-  if(it.parts.empty()){
-    it.total = tot;
-    it.start = millis();
-    it.received.assign(tot, false);
-  }
-  String part;
-  for(int i=5; i<AES_BLOCK_LEN; i++){
-    if(buf[i] == 0) break;
-    part += (char)buf[i];
-  }
-  it.parts[seq] = part;
-  it.received[seq] = true;
-  Serial.printf("RECV|FRAG|%s|%d/%d\n", mid.c_str(), seq+1, tot);
-  uint8_t ack[AES_BLOCK_LEN] = {0};
-  ack[0] = TYPE_ACK_FRAGMENT;
-  ack[1] = buf[1];
-  ack[2] = buf[2];
-  ack[3] = seq;
-  encryptFragment(ack);
-  lora.transmit(ack, AES_BLOCK_LEN);
-  delay(50);
-  lora.startReceive();
-  bool done = true;
-  for(bool got : it.received) if(!got){ done = false; break; }
-  if(!done) return;
-  if(isRecentMessage(mid)){
-    Serial.printf("SUPPRESS|DUPLICATE|%s\n", mid.c_str());
-    incoming.erase(mid);
-    return;
-  }
-  String full;
-  for(int i=0; i<it.total; i++) full += it.parts[i];
-  int p = full.indexOf('|');
-  String sender = full.substring(0, p);
-  String message = full.substring(p+1);
-  Serial.printf("RECV|%s|%s|%s\n", sender.c_str(), message.c_str(), mid.c_str());
-  std::vector<uint8_t> missing;
-  for(int i=0; i<it.total; i++) if(!it.received[i]) missing.push_back(i);
-  if(missing.empty()){
-    uint8_t vr[AES_BLOCK_LEN] = {0};
-    vr[0] = TYPE_VERIFY_REPLY;
-    vr[1] = buf[1];
-    vr[2] = buf[2];
-    memcpy(&vr[3], "OK", 2);
-    encryptFragment(vr);
-    lora.transmit(vr, AES_BLOCK_LEN);
-    Serial.printf("VERIFY|REPLY|OK|%s\n", mid.c_str());
-  } else {
-    for(uint8_t s : missing){
-      uint8_t rr[AES_BLOCK_LEN] = {0};
-      rr[0] = TYPE_REFRAGMENT_REQ;
-      rr[1] = buf[1];
-      rr[2] = buf[2];
-      rr[3] = s;
-      encryptFragment(rr);
-      lora.transmit(rr, AES_BLOCK_LEN);
-      Serial.printf("REFRAG|REQ|%s|SEQ=%d\n", mid.c_str(), s);
-      delay(50);
+  uint8_t type = buf[0];
+
+  // If the message is a text fragement
+  if ((type & 0x0F) == TYPE_TEXT_FRAGMENT) {
+    String msgId = String((buf[1] << 8) | buf[2], HEX);
+    uint8_t seq = buf[3];
+    uint8_t total = buf[4];
+    String part = "";
+
+    for (int i = 5; i < AES_BLOCK_LEN; i++) {
+      if (buf[i] == 0x00) break;
+      part += (char)buf[i];
     }
+
+    IncomingText& msg = incoming[msgId];
+    msg.total = total;
+    msg.parts[seq] = part;
+    msg.start = millis();
+    if (msg.received.empty()) {
+      msg.received.resize(total, false);
+    }
+    msg.received[seq] = true;
+
+    Serial.printf("RECV|FRAG|%s|%d/%d\n", msgId.c_str(), seq + 1, total);
+
+    uint8_t ack[AES_BLOCK_LEN] = {0};
+    ack[0] = TYPE_ACK_FRAGMENT;
+    ack[1] = buf[1];
+    ack[2] = buf[2];
+    ack[3] = buf[3];
+    encryptFragment(ack);
+    delay(10);
+    lora.transmit(ack, AES_BLOCK_LEN);
+    delay(50);
+    lora.startReceive();
+
+    bool complete = true;
+    for (bool got : msg.received) {
+      if (!got) {
+        complete = false;
+        break;
+      }
+    }
+
+    if (complete) {
+      if (isRecentMessage(msgId)) {
+        Serial.print("SUPPRESS|DUPLICATE|");
+        Serial.println(msgId);
+        incoming.erase(msgId);
+        return;
+      }
+
+      String fullMessage;
+      for (int i = 0; i < total; i++) fullMessage += msg.parts[i];
+
+      int sep = fullMessage.indexOf('|');
+      String sender = fullMessage.substring(0, sep);
+      String message = fullMessage.substring(sep + 1);
+
+      Serial.print("RECV|"); 
+      Serial.print(sender);
+      Serial.print("|");
+      Serial.print(message);
+      Serial.print("|");
+      Serial.println(msgId);
+
+      uint8_t ackConfirm[AES_BLOCK_LEN] = {0};
+      ackConfirm[0] = TYPE_ACK_CONFIRM;
+      ackConfirm[1] = buf[1];
+      ackConfirm[2] = buf[2];
+      ackConfirm[3] = 0xAC; // Arbitrary marker for ACK_CONFIRM
+      encryptFragment(ackConfirm);
+      delay(10);
+      lora.transmit(ackConfirm, AES_BLOCK_LEN);
+      delay(50);
+      lora.startReceive();
+    }
+
+  } else if (type == TYPE_ACK_CONFIRM) {
+
+    digitalWrite(LED_PIN, HIGH);
+    delay(1000);
+    digitalWrite(LED_PIN, LOW);
+
+    Serial.print("RECV|ACK_CONFIRM|");
+    String msgId = String((buf[1] << 8) | buf[2], HEX);
+    msgId.toUpperCase();
+    Serial.print(msgId);
+    Serial.println();
   }
-  incoming.erase(mid);
 }
 
 void processAck(uint8_t* buf) {
   decryptFragment(buf);
-  if(buf[0] != TYPE_ACK_FRAGMENT) return;
-  String mid = String((buf[1] << 8) | buf[2], HEX);
-  uint8_t seq = buf[3];
-  if(mid == currentMsgId && seq < currentFrags.size()){
-    currentFrags[seq].acked = true;
-    Serial.printf("ACK|RECV|%s|SEQ=%d\n", mid.c_str(), seq);
-  }
-}
+  if (buf[0] != TYPE_ACK_FRAGMENT) return;
 
-void processRefragReq(uint8_t* buf) {
-  decryptFragment(buf);
-  if(buf[0] != TYPE_REFRAGMENT_REQ) return;
-  String mid = String((buf[1] << 8) | buf[2], HEX);
+  String msgId = String((buf[1] << 8) | buf[2], HEX);
   uint8_t seq = buf[3];
-  if(mid != currentMsgId || seq >= currentFrags.size()) return;
-  lora.transmit(currentFrags[seq].data, AES_BLOCK_LEN);
-  Serial.printf("REFRAG|SEND|%s|SEQ=%d\n", mid.c_str(), seq);
-  delay(50);
-  sendVerifyRequest(mid);
-}
 
-void processVerifyReply(uint8_t* buf) {
-  decryptFragment(buf);
-  if(buf[0] != TYPE_VERIFY_REPLY) return;
-  String mid = String((buf[1] << 8) | buf[2], HEX);
-  if(mid != currentMsgId) return;
-  if(buf[3]=='O' && buf[4]=='K'){
-    Serial.printf("CONFIRM|OK|%s\n", mid.c_str());
-    sending = false;
+  auto it = outgoing.find(msgId);
+  if (it != outgoing.end() && seq < it->second.size()) {
+    it->second[seq].acked = true;
+    Serial.printf("ACK|RECV|%s|SEQ=%d\n", msgId.c_str(), seq);
   }
 }
 
 void retryFragments() {
-  // no-op: handshake covers retries
+  for (auto it = outgoing.begin(); it != outgoing.end(); ) {
+    bool allAcked = true;
+    for (auto& frag : it->second) {
+      if (frag.acked || frag.retries >= MAX_RETRIES) continue;
+
+      unsigned long start = millis();
+      while (millis() - start < RETRY_INTERVAL) {
+        uint8_t buf[128];
+        int state = lora.receive(buf, sizeof(buf));
+        if (state == RADIOLIB_ERR_NONE) {
+          processFragment(buf);
+          processAck(buf);
+        }
+
+        if (frag.acked) {
+          Serial.print("RETRY|SKIP|ACKED|");
+          for (int i = 0; i < AES_BLOCK_LEN; i++) Serial.printf("%02X", frag.data[i]);
+          Serial.println();
+          break;
+        }
+      }
+
+      if (!frag.acked) {
+        int state = lora.transmit(frag.data, AES_BLOCK_LEN);
+        if (state == RADIOLIB_ERR_NONE) {
+          frag.timestamp = millis();
+          frag.retries++;
+          Serial.print("RETRY|SEND|");
+          for (int i = 0; i < AES_BLOCK_LEN; i++) Serial.printf("%02X", frag.data[i]);
+          Serial.println();
+        } else {
+          Serial.print("RETRY|FAIL|");
+          Serial.println(state);
+        }
+
+        lora.startReceive();
+      }
+
+      if (!frag.acked && frag.retries < MAX_RETRIES) allAcked = false;
+    }
+
+    if (allAcked) it = outgoing.erase(it);
+    else ++it;
+  }
 }
 
+/**
+ * @brief Setup function
+ * 
+ * MAIN SETUP
+ * Initializes the LoRa module, sets the AES key, and starts receiving data.
+ */
 void setup() {
   pinMode(LED_PIN, OUTPUT);
   pinMode(OLED_POWER_PIN, OUTPUT);
@@ -273,35 +349,73 @@ void setup() {
   delay(100);
   Wire.begin(SDA_OLED_PIN, SCL_OLED_PIN, 500000);
   delay(100);
+
+  // Turn on the LED
   digitalWrite(LED_PIN, HIGH);
-  Serial.begin(115200); while(!Serial);
-  if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)){
-    Serial.println("INIT|OLED_FAILED"); for(;;);
+
+  Serial.begin(115200);
+  while (!Serial);
+
+  // Check to ensure that the OLED display is connected
+  if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("INIT|OLED_FAILED. CHECK CONNECTIONS.");
+    for(;;); // Don't proceed, loop forever
   }
+
+  // Initialize the display.
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
   display.clearDisplay();
-  int cx = SCREEN_WIDTH/2;
-  int cy = SCREEN_HEIGHT/2 - 8;
-  display.fillCircle(cx, cy, 12, SSD1306_WHITE);
-  display.fillCircle(cx, cy+3, 12, SSD1306_BLACK);
-  display.fillCircle(cx, cy+6, 7, SSD1306_WHITE);
-  display.fillCircle(cx-3, cy+5, 1, SSD1306_BLACK);
-  display.fillCircle(cx+3, cy+5, 1, SSD1306_BLACK);
-  display.drawLine(cx+8, cy-6, cx+14, cy+12, SSD1306_WHITE);
-  display.drawLine(cx+12, cy-10, cx+18, cy-2, SSD1306_WHITE);
+
+  // Draw a small "reaper" icon (skull with hood) in the center of the screen
+  int centerX = SCREEN_WIDTH / 2;
+  int centerY = SCREEN_HEIGHT / 2 - 8;
+
+  // Draw hood (semicircle)
+  display.fillCircle(centerX, centerY, 12, SSD1306_WHITE);
+  display.fillCircle(centerX, centerY + 3, 12, SSD1306_BLACK);
+
+  // Draw face (skull)
+  display.fillCircle(centerX, centerY + 6, 7, SSD1306_WHITE);
+
+  // Draw eyes
+  display.fillCircle(centerX - 3, centerY + 5, 1, SSD1306_BLACK);
+  display.fillCircle(centerX + 3, centerY + 5, 1, SSD1306_BLACK);
+
+  // Draw mouth (simple line)
+  //display.drawFastHLine(centerX - 2, centerY + 10, 5, SSD1306_BLACK);
+
+  // Draw scythe handle
+  display.drawLine(centerX + 8, centerY - 6, centerX + 14, centerY + 12, SSD1306_WHITE);
+
+  // Draw scythe blade
+  display.drawLine(centerX + 12, centerY - 10, centerX + 18, centerY - 2, SSD1306_WHITE);
+
+  // Draw "Reaper Mesh" text under the flower
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
   String title = "Reaper Mesh - v" + String(REAPER_VERSION);
-  int16_t x1, y1; uint16_t w, h;
+  int16_t x1, y1;
+  uint16_t w, h;
   display.getTextBounds(title, 0, 0, &x1, &y1, &w, &h);
-  display.setCursor((SCREEN_WIDTH - w)/2, SCREEN_HEIGHT - h - 2);
-  display.setTextSize(1); display.setTextColor(SSD1306_WHITE);
-  display.print(title); display.display();
+  int textX = (SCREEN_WIDTH - w) / 2;
+  int textY = SCREEN_HEIGHT - h - 2; // 2 pixels above the bottom edge
+  display.setCursor(textX, textY);
+  display.print(title);
+
+  display.display();
+
+  // Set the AES key for encryption/decryption
   aes.setKey(aes_key, sizeof(aes_key));
-  uint16_t cid = (uint16_t)((ESP.getEfuseMac() >> 32) & 0xFFFF);
-  snprintf(deviceName, sizeof(deviceName), "%04X", cid);
-  int st = lora.begin(FREQUENCY);
-  if(st != RADIOLIB_ERR_NONE){
-    Serial.printf("ERR|INIT_FAIL|%d\n", st);
-    while(1);
+  uint64_t chipId = ESP.getEfuseMac();
+  snprintf(deviceName, sizeof(deviceName), "%04X", (uint16_t)((chipId >> 32) & 0xFFFF));
+
+  // Initialize the LoRa module on teh frequency defined above
+  int state = lora.begin(FREQUENCY);
+  if (state != RADIOLIB_ERR_NONE) {
+    Serial.print("ERR|INIT_FAIL|"); Serial.println(state);
+    while (true);
   }
+
   lora.setBandwidth(BANDWIDTH);
   lora.setSpreadingFactor(SPREADING_FACTOR);
   lora.setCodingRate(CODING_RATE);
@@ -309,31 +423,47 @@ void setup() {
   lora.setSyncWord(SYNC_WORD);
   lora.setOutputPower(TX_POWER);
   lora.setCRC(true);
-  Serial.printf("INIT|LoRa Ready as %s\n", deviceName);
+
+  Serial.print("INIT|LoRa Ready as "); Serial.println(deviceName);
   delay(1000 + random(0, 1500));
   lora.startReceive();
+
+  // Turn off the LED
   digitalWrite(LED_PIN, LOW);
 }
 
 void loop() {
-  if(Serial.available()){
-    String in = Serial.readStringUntil('\n'); in.trim();
-    if(in.startsWith("AT+MSG=")){ msgQueue.push_back(in.substring(7)); Serial.println("QUEUE|MSG"); }
-    else if(in.startsWith("AT+GPS=")){ msgQueue.push_back("GPS:" + in.substring(7)); Serial.println("QUEUE|GPS"); }
-    else Serial.println("ERR|UNKNOWN_CMD");
+  if (Serial.available()) {
+    String input = Serial.readStringUntil('\n');
+    input.trim();
+
+    if (input.startsWith("AT+MSG=")) {
+      String msg = input.substring(7);
+      sendEncryptedText(msg);
+    } else if (input.startsWith("AT+GPS=")) {
+      String coords = input.substring(7);
+      sendEncryptedText("GPS:" + coords);
+    } else {
+      Serial.println("ERR|UNKNOWN_CMD");
+    }
   }
-  uint8_t buf[128]; int st = lora.receive(buf, sizeof(buf));
-  if(st == RADIOLIB_ERR_NONE){
-    uint8_t t = buf[0] & 0x0F;
-    if(t == TYPE_TEXT_FRAGMENT) processFragment(buf);
-    else if(t == TYPE_ACK_FRAGMENT) processAck(buf);
-    else if(t == TYPE_REFRAGMENT_REQ) processRefragReq(buf);
-    else if(t == TYPE_VERIFY_REPLY) processVerifyReply(buf);
+
+  uint8_t buf[128];
+  int state = lora.receive(buf, sizeof(buf));
+  if (state == RADIOLIB_ERR_NONE) {
+    if (buf[0] == TYPE_ACK_FRAGMENT) {
+      processAck(buf);
+    } else if (buf[0] == TYPE_VERIFY_REPLY) {
+      processConfirm(buf);
+    } else {
+      processFragment(buf);
+    }
     lora.startReceive();
-  } else if(st != RADIOLIB_ERR_RX_TIMEOUT){
-    Serial.printf("ERR|RX_FAIL|%d\n", st);
+  } else if (state != RADIOLIB_ERR_RX_TIMEOUT) {
+    Serial.print("ERR|RX_FAIL|");
+    Serial.println(state);
     lora.startReceive();
   }
-  handleSenderTimeout();
-  maybeStartNext();
+
+  retryFragments();
 }
