@@ -40,7 +40,6 @@ AT+MSG=FromDesktopThisMessageIsFrom
 AT+MSG=FromLaptop
 AT+NAME=ReaperNodeDesktop
 AT+NAME=ReaperNodeLaptop
-
 AT+MSG=Here is a longer message to be sent using lora?
 AT+MSG=Roger That
 AT+MSG=Moving to location now
