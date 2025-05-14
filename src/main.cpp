@@ -33,7 +33,7 @@
 #define TX_POWER         22
 
 #define MAX_RETRIES      1
-#define RETRY_INTERVAL   6000
+#define RETRY_INTERVAL   3000
 #define FRAG_DATA_LEN    11
 #define AES_BLOCK_LEN    16
 
@@ -173,7 +173,8 @@ void sendEncryptedText(String msg) {
     frag.timestamp = millis();
     frags.push_back(frag);
 
-    for (int r = 0; r < 2; r++) {
+    // @TODO: Look into sending two fragments. This is causing some flooding concerns.
+    for (int r = 0; r < 1; r++) {
       int state = lora.transmit(block, AES_BLOCK_LEN);
       if (state == RADIOLIB_ERR_NONE) {
         Serial.printf("SEND|FRAG|%s|%d/%d|TRY=%d\n", msgId.c_str(), i + 1, total, r + 1);
@@ -201,6 +202,7 @@ void processFragment(uint8_t* buf) {
   // If the message is a text fragement
   if ((type & 0x0F) == TYPE_TEXT_FRAGMENT) {
     String msgId = String((buf[1] << 8) | buf[2], HEX);
+    msgId.toUpperCase();
     uint8_t seq = buf[3];
     uint8_t total = buf[4];
     String part = "";
@@ -211,31 +213,21 @@ void processFragment(uint8_t* buf) {
     }
 
     IncomingText& msg = incoming[msgId];
-    msg.total = total;
-    msg.parts[seq] = part;
-    msg.start = millis();
-    if (msg.received.empty()) {
-      msg.received.resize(total, false);
+
+    if (msg.received.size() != total) {
+      msg.total = total;
+      msg.received.assign(total, false);
     }
+
+    msg.parts[seq]    = part;
     msg.received[seq] = true;
-    msgId.toUpperCase();
+    
     Serial.printf("RECV|FRAG|%s|%d/%d\n", msgId.c_str(), seq + 1, total);
 
-    // @todo: WE need to clean this up becuase it is really not needed but break the confiormation if removed. Find out why.
-    uint8_t ack[AES_BLOCK_LEN] = {0};
-    ack[0] = TYPE_ACK_FRAGMENT;
-    ack[1] = buf[1];
-    ack[2] = buf[2];
-    ack[3] = buf[3];
-    encryptFragment(ack);
-    delay(10);
-    lora.transmit(ack, AES_BLOCK_LEN);
-    delay(50);
-    lora.startReceive();
-
     bool complete = true;
-    for (bool got : msg.received) {
-      if (!got) {
+    for (int idx = 0; idx < msg.received.size(); ++idx) {
+      if (!msg.received[idx]) {
+        //Serial.printf("MISSING|FRAG|%d/%d\n", idx + 1, msg.received.size());
         complete = false;
         break;
       }
@@ -248,6 +240,18 @@ void processFragment(uint8_t* buf) {
         incoming.erase(msgId);
         return;
       }
+
+      // Send ACK_CONFIRM
+      uint8_t ackConfirm[AES_BLOCK_LEN] = {0};
+      ackConfirm[0] = TYPE_ACK_CONFIRM;
+      ackConfirm[1] = buf[1];
+      ackConfirm[2] = buf[2];
+      ackConfirm[3] = buf[3]; // Sequence number
+      encryptFragment(ackConfirm);
+      lora.transmit(ackConfirm, AES_BLOCK_LEN);
+      lora.transmit(ackConfirm, AES_BLOCK_LEN);
+      delay(50);
+      lora.startReceive();
 
       String fullMessage;
       for (int i = 0; i < total; i++) fullMessage += msg.parts[i];
@@ -263,17 +267,6 @@ void processFragment(uint8_t* buf) {
       Serial.print("|");
       msgId.toUpperCase();
       Serial.println(msgId);
-
-      uint8_t ackConfirm[AES_BLOCK_LEN] = {0};
-      ackConfirm[0] = TYPE_ACK_CONFIRM;
-      ackConfirm[1] = buf[1];
-      ackConfirm[2] = buf[2];
-      ackConfirm[3] = 0xAC; // Arbitrary marker for ACK_CONFIRM
-      encryptFragment(ackConfirm);
-      delay(10);
-      lora.transmit(ackConfirm, AES_BLOCK_LEN);
-      delay(50);
-      lora.startReceive();
     }
 
   } else if (type == TYPE_ACK_CONFIRM) {
