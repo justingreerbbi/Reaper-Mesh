@@ -16,10 +16,9 @@ The firmware uses a lightweight, serial `AT+` command interface — no Protobufs
 
 Out of the box, all messages are **AES-encrypted**. While this initial encryption is device-side, future versions will offload encryption to dedicated cryptographic modules for improved security.
 
-Thanks to message fragmentation and reassembly, messages of virtually any length can be transmitted. Payloads are split, encrypted, and reassembled seamlessly. For example, a 3KB image was successfully sent over LoRa — albeit slowly — proving this firmware's support for large data transfers.
+Thanks to built-in message fragmentation and reassembly, payloads of virtually any length can be transmitted. Messages are split, encrypted, and seamlessly reconstructed on the receiving end. For example, a 3KB image was successfully transmitted over LoRa — albeit slowly — demonstrating the system’s capability to handle large data.
 
-The firmware only support serial connection at the moment but as mentioned above, there are plans to integrate this into a mobile app as well as a self hosted
-message server possibly. I build this because I don't like feature creep or bloated software and I want to keep it simple. I do realize that even as simple as this is, it still may be complicated for the average user. I plan to tackle this hurdle once I iron out the system logic.
+Currently, the firmware supports only serial communication. However, as noted earlier, future updates will introduce support for a companion mobile app and potentially a self-hosted message server. I built this firmware with simplicity in mind — avoiding feature creep and unnecessary bloat. That said, I acknowledge that even a minimalist design like this may still pose a learning curve for some users. Once the core system logic is finalized, I plan to improve usability for broader accessibility.
 
 Regarding mesh networking: the current implementation is single-hop, but full mesh functionality is a top priority for the next major update. Mesh networking is essential — and it’s coming, I promise.
 
