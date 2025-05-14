@@ -137,7 +137,7 @@ void sendEncryptedText(String msg) {
     for (int r = 0; r < 2; r++) {
       int state = lora.transmit(block, AES_BLOCK_LEN);
       if (state == RADIOLIB_ERR_NONE) {
-        Serial.printf("SEND|FRAG|MSGID=%s|SEQ=%d/%d|TRY=%d\n", msgId.c_str(), i + 1, total, r + 1);
+        Serial.printf("SEND|FRAG|%s|%d/%d|TRY=%d\n", msgId.c_str(), i + 1, total, r + 1);
       } else {
         Serial.print("ERR|TX_FAIL|");
         Serial.println(state);
