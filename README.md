@@ -47,6 +47,8 @@ AT+MSG=Moving to location now
 AT+MSG=I am at Rally Point Alpha. Fire when Ready. In position and ready for the next phase in the mission plan.
 AT+MSG=Willing and Able. 3RD ID in place.
 
+AT+GPS=38.8977,-77.0365
+
 ```cpp
 // Example usage
 #include <YourLibrary.h>

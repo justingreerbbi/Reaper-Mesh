@@ -5,7 +5,7 @@
 #include <vector>
 #include <map>
 
-SX1262 lora = new Module(8, 14, 12, 13);  // Heltec V3.2
+SX1262 lora = new Module(8, 14, 12, 13);  // Heltec V3.2 pins
 
 #define FREQUENCY        915.0
 #define BANDWIDTH        500.0
@@ -61,6 +61,8 @@ void decryptFragment(uint8_t* input) {
 }
 
 void sendEncryptedText(String msg) {
+  msg = String(deviceName) + "|" + msg;  // prepend device name
+
   std::vector<Fragment> frags;
   String msgId = generateMsgID();
   int total = (msg.length() + FRAG_DATA_LEN - 1) / FRAG_DATA_LEN;
@@ -105,7 +107,7 @@ void processFragment(uint8_t* buf) {
   msg.parts[seq] = part;
   msg.start = millis();
 
-  // Send ACK for this fragment
+  // Send ACK
   uint8_t ack[AES_BLOCK_LEN] = {0};
   ack[0] = TYPE_ACK_FRAGMENT;
   ack[1] = buf[1];
@@ -117,10 +119,18 @@ void processFragment(uint8_t* buf) {
   if (msg.parts.size() == total) {
     String complete;
     for (int i = 0; i < total; i++) complete += msg.parts[i];
-    Serial.print("RECV|TEXT|");
-    Serial.print(msgId);
+
+    int sep = complete.indexOf('|');
+    String sender = complete.substring(0, sep);
+    String message = complete.substring(sep + 1);
+
+    Serial.print("RECV|FROM=");
+    Serial.print(sender);
     Serial.print("|MSG=");
-    Serial.println(complete);
+    Serial.print(message);
+    Serial.print("|ID=");
+    Serial.println(msgId);
+
     incoming.erase(msgId);
   }
 }
@@ -170,8 +180,9 @@ void retryFragments() {
 void setup() {
   Serial.begin(115200);
   while (!Serial);
-  
+
   aes.setKey(aes_key, sizeof(aes_key));
+
   uint64_t chipId = ESP.getEfuseMac();
   snprintf(deviceName, sizeof(deviceName), "R-%04X", (uint16_t)((chipId >> 32) & 0xFFFF));
 
@@ -180,6 +191,7 @@ void setup() {
     Serial.print("ERR|INIT_FAIL|"); Serial.println(state);
     while (true);
   }
+
   lora.setBandwidth(BANDWIDTH);
   lora.setSpreadingFactor(SPREADING_FACTOR);
   lora.setCodingRate(CODING_RATE);
@@ -188,7 +200,7 @@ void setup() {
   lora.setOutputPower(TX_POWER);
   lora.setCRC(true);
 
-  Serial.print("INIT|Ready as "); Serial.println(deviceName);
+  Serial.print("INIT|LoRa Ready as "); Serial.println(deviceName);
   lora.startReceive();
 }
 
@@ -196,9 +208,13 @@ void loop() {
   if (Serial.available()) {
     String input = Serial.readStringUntil('\n');
     input.trim();
+
     if (input.startsWith("AT+MSG=")) {
       String msg = input.substring(7);
       sendEncryptedText(msg);
+    } else if (input.startsWith("AT+GPS=")) {
+      String coords = input.substring(7);
+      sendEncryptedText("GPS:" + coords);
     } else {
       Serial.println("ERR|UNKNOWN_CMD");
     }
