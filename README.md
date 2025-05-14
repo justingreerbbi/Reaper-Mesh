@@ -18,6 +18,9 @@ Out of the box, all messages are **AES-encrypted**. While this initial encryptio
 
 Thanks to message fragmentation and reassembly, messages of virtually any length can be transmitted. Payloads are split, encrypted, and reassembled seamlessly. For example, a 3KB image was successfully sent over LoRa — albeit slowly — proving this firmware's support for large data transfers.
 
+The firmware only support serial connection at the moment but as mentioned above, there is plans to integrate this into a mobile app as well as a self hosted
+message server possibly. I build this because I don't like feature creep or bloated software and I want to keep it simple. I do realize that even as simple as this is, it still may be complicated for the average user. I plan to tackle this hurdle once I iron out the system logic.
+
 ---
 
 ## 🚀 Architecture Overview (WIP)
