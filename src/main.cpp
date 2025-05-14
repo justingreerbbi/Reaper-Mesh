@@ -17,8 +17,11 @@ SX1262 lora = new Module(8, 14, 12, 13);  // Heltec V3.2
 
 #define MAX_RETRIES      3
 #define RETRY_INTERVAL   5000  // ms
-#define FRAG_DATA_LEN    11    // encrypted fragment data payload
+#define FRAG_DATA_LEN    11
 #define AES_BLOCK_LEN    16
+
+#define TYPE_TEXT_FRAGMENT 0x03
+#define TYPE_ACK_FRAGMENT  0x04
 
 char deviceName[16];
 AES128 aes;
@@ -31,6 +34,7 @@ struct Fragment {
   uint8_t data[AES_BLOCK_LEN];
   int retries;
   unsigned long timestamp;
+  bool acked = false;
 };
 
 struct IncomingText {
@@ -63,7 +67,7 @@ void sendEncryptedText(String msg) {
 
   for (int i = 0; i < total; i++) {
     uint8_t block[AES_BLOCK_LEN] = {0};
-    block[0] = 0x03;  // text fragment
+    block[0] = TYPE_TEXT_FRAGMENT;
     block[1] = (uint8_t)(msgId.toInt() >> 8);
     block[2] = (uint8_t)(msgId.toInt() & 0xFF);
     block[3] = (uint8_t)i;
@@ -84,7 +88,7 @@ void sendEncryptedText(String msg) {
 
 void processFragment(uint8_t* buf) {
   decryptFragment(buf);
-  if (buf[0] != 0x03) return;
+  if (buf[0] != TYPE_TEXT_FRAGMENT) return;
 
   String msgId = String((buf[1] << 8) | buf[2], HEX);
   uint8_t seq = buf[3];
@@ -101,6 +105,15 @@ void processFragment(uint8_t* buf) {
   msg.parts[seq] = part;
   msg.start = millis();
 
+  // Send ACK for this fragment
+  uint8_t ack[AES_BLOCK_LEN] = {0};
+  ack[0] = TYPE_ACK_FRAGMENT;
+  ack[1] = buf[1];
+  ack[2] = buf[2];
+  ack[3] = buf[3];
+  encryptFragment(ack);
+  lora.transmit(ack, AES_BLOCK_LEN);
+
   if (msg.parts.size() == total) {
     String complete;
     for (int i = 0; i < total; i++) complete += msg.parts[i];
@@ -112,11 +125,26 @@ void processFragment(uint8_t* buf) {
   }
 }
 
+void processAck(uint8_t* buf) {
+  decryptFragment(buf);
+  if (buf[0] != TYPE_ACK_FRAGMENT) return;
+
+  String msgId = String((buf[1] << 8) | buf[2], HEX);
+  uint8_t seq = buf[3];
+
+  auto it = outgoing.find(msgId);
+  if (it != outgoing.end() && seq < it->second.size()) {
+    it->second[seq].acked = true;
+    Serial.printf("ACK|RECV|%s|SEQ=%d\n", msgId.c_str(), seq);
+  }
+}
+
 void retryFragments() {
   for (auto it = outgoing.begin(); it != outgoing.end(); ) {
-    bool allDone = true;
+    bool allAcked = true;
     for (auto& frag : it->second) {
-      if (frag.retries >= MAX_RETRIES) continue;
+      if (frag.acked || frag.retries >= MAX_RETRIES) continue;
+
       if (millis() - frag.timestamp >= RETRY_INTERVAL) {
         int state = lora.transmit(frag.data, AES_BLOCK_LEN);
         if (state == RADIOLIB_ERR_NONE) {
@@ -130,9 +158,11 @@ void retryFragments() {
           Serial.println(state);
         }
       }
-      if (frag.retries < MAX_RETRIES) allDone = false;
+
+      if (!frag.acked && frag.retries < MAX_RETRIES) allAcked = false;
     }
-    if (allDone) it = outgoing.erase(it);
+
+    if (allAcked) it = outgoing.erase(it);
     else ++it;
   }
 }
@@ -144,7 +174,6 @@ void setup() {
   aes.setKey(aes_key, sizeof(aes_key));
   uint64_t chipId = ESP.getEfuseMac();
   snprintf(deviceName, sizeof(deviceName), "R-%04X", (uint16_t)((chipId >> 32) & 0xFFFF));
-
 
   int state = lora.begin(FREQUENCY);
   if (state != RADIOLIB_ERR_NONE) {
@@ -158,6 +187,7 @@ void setup() {
   lora.setSyncWord(SYNC_WORD);
   lora.setOutputPower(TX_POWER);
   lora.setCRC(true);
+
   Serial.print("INIT|LoRa Ready as "); Serial.println(deviceName);
   lora.startReceive();
 }
@@ -177,12 +207,17 @@ void loop() {
   uint8_t buf[128];
   int state = lora.receive(buf, sizeof(buf));
   if (state == RADIOLIB_ERR_NONE) {
-    processFragment(buf);
+    if (buf[0] == TYPE_ACK_FRAGMENT) {
+      processAck(buf);
+    } else {
+      processFragment(buf);
+    }
     lora.startReceive();
   } else if (state != RADIOLIB_ERR_RX_TIMEOUT) {
     Serial.print("ERR|RX_FAIL|");
     Serial.println(state);
     lora.startReceive();
   }
+
   retryFragments();
 }
