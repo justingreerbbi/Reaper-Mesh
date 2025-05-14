@@ -1,56 +1,59 @@
 /**
  * @file main.cpp
  * @brief Encrypted LoRa Messaging Firmware for Heltec V3.2
- * 
- * Implements AES-128 encrypted, fragmented messaging over LoRa with basic ACK support,
- * retry logic, OLED status display, and command interface over Serial.
+ *
+ * Implements AES-128 encrypted, fragmented messaging over LoRa with basic ACK
+ * support, retry logic, OLED status display, command interface over Serial,
+ * and EEPROM-backed settings.
  */
 
-#include <RadioLib.h>
-#include <Crypto.h>
 #include <AES.h>
-#include <string.h>
-#include <vector>
-#include <map>
-#include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <Crypto.h>
+#include <EEPROM.h>
+#include <RadioLib.h>
+#include <Wire.h>
+#include <math.h>
+#include <string.h>
 
-// Versioning
+#include <map>
+#include <vector>
+
 #define REAPER_VERSION "1.77.6"
 
-// LoRa radio parameters
-#define FREQUENCY        915.0
-#define BANDWIDTH        500.0
+// EEPROM settings storage
+#define EEPROM_SIZE 128
+#define ADDR_MAGIC 0
+#define ADDR_SETTINGS 4
+#define EEPROM_MAGIC 0x42
+
+// Default LoRa parameters (overridden by settings)
+#define BANDWIDTH 500.0
 #define SPREADING_FACTOR 12
-#define CODING_RATE      8
-#define PREAMBLE_LENGTH  20
-#define SYNC_WORD        0xF3
-#define TX_POWER         22
+#define CODING_RATE 8
+#define PREAMBLE_LENGTH 20
+#define SYNC_WORD 0xF3
 
-// Fragmentation & retry config
-#define MAX_RETRIES      1
-#define RETRY_INTERVAL   1000 // ms between retries
-#define FRAG_DATA_LEN    11   // Max plaintext bytes per fragment
-#define AES_BLOCK_LEN    16   // AES block size (bytes)
+// Fragmentation & retry config defaults
+#define FRAG_DATA_LEN 11
+#define AES_BLOCK_LEN 16
 
-// Packet type definitions
-#define TYPE_TEXT_FRAGMENT  0x03
-#define TYPE_ACK_FRAGMENT   0x04
+// Packet types
+#define TYPE_TEXT_FRAGMENT 0x03
+#define TYPE_ACK_FRAGMENT 0x04
 #define TYPE_REFRAGMENT_REQ 0x05
 #define TYPE_VERIFY_REQUEST 0x06
-#define TYPE_VERIFY_REPLY   0x07
-#define TYPE_ACK_CONFIRM    0x08
+#define TYPE_VERIFY_REPLY 0x07
+#define TYPE_ACK_CONFIRM 0x08
 
-// Message priority markers
 #define PRIORITY_NORMAL 0x03
-#define PRIORITY_HIGH   0x13
+#define PRIORITY_HIGH 0x13
 
-// Replay protection
-#define BROADCAST_MEMORY_TIME 30000 // ms to remember seen message IDs
-#define REQ_TIMEOUT 2000 // timeout for some request-based interactions (unused here)
+#define BROADCAST_MEMORY_TIME 30000UL
+#define REQ_TIMEOUT 2000UL
 
-// OLED and LED config
+// GPIO / Display
 #define LED_PIN 35
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -59,38 +62,55 @@
 #define SCL_OLED_PIN 18
 #define SDA_OLED_PIN 17
 
-// Becon Config
-#define BEACON_ENABLED true
-#define BEACON_INTERVAL 50000 // ms between beacons
+// Beacon config
+#define BEACON_ENABLED false
+#define BEACON_INTERVAL 0
 
-// LoRa module (SX1262) and OLED setup
+// Global Status
+bool isTransmitting = false;
+bool isReceiving = false;
+
+// Settings struct saved to EEPROM
+struct Settings {
+  char deviceName[16];
+  float frequency;  // 900.0 to 915.0 step 4.0
+  int txPower;
+  int maxRetries;
+  unsigned long retryInterval;
+  unsigned long beaconInterval;
+  bool beaconEnabled;
+};
+
+// Globals
+Settings settings;
+char deviceName[16];
+
+// Prototypes
+void loadSettings();
+void saveSettings();
+void applySettings();
+void processATSetting(const String &cmd);
+void processATBulk(const String &cmd);
+
+// LoRa & display objects
 SX1262 lora = new Module(8, 14, 12, 13);
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, RST_OLED_PIN);
 
-// State flags
-bool isReceiving_flag = false;
-bool isSending_flag = false;
-bool retry_flag = false;
-
-// Device name buffer
-char deviceName[16];
-
-// AES-128 setup
+// AES
 AES128 aes;
-uint8_t aes_key[16] = {
-  0x60, 0x3D, 0xEB, 0x10, 0x15, 0xCA, 0x71, 0xBE,
-  0x2B, 0x73, 0xAE, 0xF0, 0x85, 0x7D, 0x77, 0x81
-};
+uint8_t aes_key[16] = {0x60, 0x3D, 0xEB, 0x10, 0x15, 0xCA, 0x71, 0xBE,
+                       0x2B, 0x73, 0xAE, 0xF0, 0x85, 0x7D, 0x77, 0x81};
 
-// Fragment buffer and state tracking
+// Handshake state
+String currentMsgId;
+
+// Original message logic types
 struct Fragment {
   uint8_t data[AES_BLOCK_LEN];
   int retries;
   unsigned long timestamp;
   bool acked = false;
 };
-
-// Incoming message structure
 struct IncomingText {
   int total;
   unsigned long start;
@@ -98,58 +118,53 @@ struct IncomingText {
   std::vector<bool> received;
 };
 
-// Message tracking maps
 std::map<String, std::vector<Fragment>> outgoing;
 std::map<String, IncomingText> incoming;
 std::map<String, unsigned long> recentMsgs;
 
-// Function declarations
-void processFragment(uint8_t* buf);
-void processAck(uint8_t* buf);
-
-// Generates a 4-digit hex message ID using random value
+// Utility
 String generateMsgID() {
   char buf[7];
   snprintf(buf, sizeof(buf), "%04X", (uint16_t)esp_random());
   return String(buf);
 }
-
-// Replay protection: return true if msgId was seen recently
-bool isRecentMessage(String msgId) {
+bool isRecentMessage(const String &msgId) {
   unsigned long now = millis();
-  for (auto it = recentMsgs.begin(); it != recentMsgs.end(); ) {
-    if (now - it->second > BROADCAST_MEMORY_TIME) {
+  for (auto it = recentMsgs.begin(); it != recentMsgs.end();) {
+    if (now - it->second > BROADCAST_MEMORY_TIME)
       it = recentMsgs.erase(it);
-    } else {
+    else
       ++it;
-    }
   }
-  if (recentMsgs.find(msgId) != recentMsgs.end()) return true;
+  if (recentMsgs.count(msgId)) return true;
   recentMsgs[msgId] = now;
   return false;
 }
+void encryptFragment(uint8_t *b) { aes.encryptBlock(b, b); }
+void decryptFragment(uint8_t *b) { aes.decryptBlock(b, b); }
 
-// AES helper functions
-void encryptFragment(uint8_t* input) {
-  aes.encryptBlock(input, input);
-}
-void decryptFragment(uint8_t* input) {
-  aes.decryptBlock(input, input);
-}
-
-// Encrypts, fragments, and sends a message
+// Original sendEncryptedText
 void sendEncryptedText(String msg) {
+  // If TX is busy, return error
+  if (isTransmitting) {
+    Serial.println("ERR|TX_BUSY");
+    return;
+  }
+  isTransmitting = true;
+
   bool highPriority = false;
   if (msg.startsWith("!")) {
     highPriority = true;
     msg.remove(0, 1);
   }
 
-  msg = String(deviceName) + "|" + msg;
+  msg = String(settings.deviceName) + "|" + msg;
   std::vector<Fragment> frags;
   String msgId = generateMsgID();
+  currentMsgId = msgId;
   int total = (msg.length() + FRAG_DATA_LEN - 1) / FRAG_DATA_LEN;
-  delay(random(100, 400)); // prevent collision
+
+  delay(random(100, 400));  // initial jitter
 
   for (int i = 0; i < total; i++) {
     uint8_t block[AES_BLOCK_LEN] = {0};
@@ -159,7 +174,8 @@ void sendEncryptedText(String msg) {
     block[3] = (uint8_t)i;
     block[4] = (uint8_t)total;
 
-    String chunk = msg.substring(i * FRAG_DATA_LEN, min((i + 1) * FRAG_DATA_LEN, (int)msg.length()));
+    String chunk = msg.substring(
+        i * FRAG_DATA_LEN, min((i + 1) * FRAG_DATA_LEN, (int)msg.length()));
     memcpy(&block[5], chunk.c_str(), chunk.length());
     encryptFragment(block);
 
@@ -167,57 +183,43 @@ void sendEncryptedText(String msg) {
     memcpy(frag.data, block, AES_BLOCK_LEN);
     frag.retries = 0;
     frag.timestamp = millis();
+    frag.acked = false;
     frags.push_back(frag);
 
-    for (int r = 0; r < 1; r++) { // 1 or 2 times for reliability
+    for (int r = 0; r < settings.maxRetries + 1; r++) {
       int state = lora.transmit(block, AES_BLOCK_LEN);
       if (state == RADIOLIB_ERR_NONE) {
-        Serial.printf("SEND|FRAG|%s|%d/%d|TRY=%d\n", msgId.c_str(), i + 1, total, r + 1);
-      } else {
-        Serial.print("ERR|TX_FAIL|");
-        Serial.println(state);
+        Serial.printf("SEND|FRAG|%s|%d/%d|TRY=%d\n", msgId.c_str(), i + 1,
+                      total, r + 1);
+        break;
       }
+      Serial.print("ERR|TX_FAIL|");
+      Serial.println(state);
     }
   }
 
   outgoing[msgId] = frags;
+  isTransmitting = false;  // Reset TX state
 }
 
-// Handles received fragments or ACK_CONFIRM
-/**
- * @brief Processes an incoming data fragment buffer, handling both text message fragments and ACK confirmations.
- *
- * This function decrypts the provided buffer, determines the fragment type, and processes it accordingly:
- * - For text fragments, it reconstructs multi-part messages, tracks received parts, and assembles the full message
- *   when all fragments are received. It also sends an ACK_CONFIRM response upon complete reception.
- * - For ACK_CONFIRM fragments, it acknowledges the receipt by toggling an LED and marking the corresponding outgoing
- *   message fragments as acknowledged.
- *
- * @param buf Pointer to the buffer containing the incoming fragment data. The buffer is expected to be at least
- *            AES_BLOCK_LEN bytes long and encrypted.
- *
- * @note Relies on global variables and objects such as `incoming`, `outgoing`, `lora`, and constants like
- *       `TYPE_TEXT_FRAGMENT`, `TYPE_ACK_CONFIRM`, `AES_BLOCK_LEN`, and `LED_PIN`.
- * @note Uses Serial for debug output and assumes the existence of helper functions such as `decryptFragment`,
- *       `encryptFragment`, and `isRecentMessage`.
- */
-void processFragment(uint8_t* buf) {
+// Original processFragment
+void processFragment(uint8_t *buf) {
   decryptFragment(buf);
-  uint8_t type = buf[0];
+  uint8_t type = buf[0] & 0x0F;
 
-  if ((type & 0x0F) == TYPE_TEXT_FRAGMENT) {
+  if (type == TYPE_TEXT_FRAGMENT) {
     String msgId = String((buf[1] << 8) | buf[2], HEX);
     msgId.toUpperCase();
     uint8_t seq = buf[3];
     uint8_t total = buf[4];
-    String part = "";
+    String part;
 
     for (int i = 5; i < AES_BLOCK_LEN; i++) {
       if (buf[i] == 0x00) break;
       part += (char)buf[i];
     }
 
-    IncomingText& msg = incoming[msgId];
+    IncomingText &msg = incoming[msgId];
     if (msg.received.size() != total) {
       msg.total = total;
       msg.received.assign(total, false);
@@ -228,8 +230,8 @@ void processFragment(uint8_t* buf) {
     Serial.printf("RECV|FRAG|%s|%d/%d\n", msgId.c_str(), seq + 1, total);
 
     bool complete = true;
-    for (int idx = 0; idx < msg.received.size(); ++idx) {
-      if (!msg.received[idx]) {
+    for (bool got : msg.received) {
+      if (!got) {
         complete = false;
         break;
       }
@@ -241,14 +243,12 @@ void processFragment(uint8_t* buf) {
         return;
       }
 
-      // Send ACK_CONFIRM
       uint8_t ackConfirm[AES_BLOCK_LEN] = {0};
       ackConfirm[0] = TYPE_ACK_CONFIRM;
       ackConfirm[1] = buf[1];
       ackConfirm[2] = buf[2];
       ackConfirm[3] = buf[3];
       encryptFragment(ackConfirm);
-      lora.transmit(ackConfirm, AES_BLOCK_LEN);
       lora.transmit(ackConfirm, AES_BLOCK_LEN);
       delay(50);
       lora.startReceive();
@@ -260,36 +260,39 @@ void processFragment(uint8_t* buf) {
       String sender = fullMessage.substring(0, sep);
       String message = fullMessage.substring(sep + 1);
 
-      Serial.print("RECV|"); Serial.print(sender); Serial.print("|");
-      Serial.print(message); Serial.print("|"); Serial.println(msgId);
+      Serial.print("RECV|");
+      Serial.print(sender);
+      Serial.print("|");
+      Serial.print(message);
+      Serial.print("|");
+      Serial.println(msgId);
     }
   } else if (type == TYPE_ACK_CONFIRM) {
     digitalWrite(LED_PIN, HIGH);
-    delay(1000);
+    delay(200);
     digitalWrite(LED_PIN, LOW);
 
     Serial.print("RECV|ACK_CONFIRM|");
-    char msgIdBuf[5];
-    snprintf(msgIdBuf, sizeof(msgIdBuf), "%02X%02X", buf[1], buf[2]);
-    String msgId = String(msgIdBuf);
-    msgId.toUpperCase();
-    Serial.println(msgId);
+    char bufId[5];
+    snprintf(bufId, sizeof(bufId), "%02X%02X", buf[1], buf[2]);
+    String mid(bufId);
+    mid.toUpperCase();
+    Serial.println(mid);
 
-    auto it = outgoing.find(msgId);
+    // Unconditionally mark all fragments for this msgId as acknowledged
+    auto it = outgoing.find(mid);
     if (it != outgoing.end()) {
-      for (auto& frag : it->second) frag.acked = true;
+      for (auto &frag : it->second) frag.acked = true;
     }
   }
 }
 
-// Handles ACK fragment reception
-void processAck(uint8_t* buf) {
+// Original processAck
+void processAck(uint8_t *buf) {
   decryptFragment(buf);
   if (buf[0] != TYPE_ACK_FRAGMENT) return;
-
   String msgId = String((buf[1] << 8) | buf[2], HEX);
   uint8_t seq = buf[3];
-
   auto it = outgoing.find(msgId);
   if (it != outgoing.end() && seq < it->second.size()) {
     it->second[seq].acked = true;
@@ -297,15 +300,14 @@ void processAck(uint8_t* buf) {
   }
 }
 
-// Resend unacked fragments after interval
+// Original retryFragments
 void retryFragments() {
-  for (auto it = outgoing.begin(); it != outgoing.end(); ) {
+  for (auto it = outgoing.begin(); it != outgoing.end();) {
     bool allAcked = true;
-    for (auto& frag : it->second) {
-      if (frag.acked || frag.retries >= MAX_RETRIES) continue;
-
+    for (auto &frag : it->second) {
+      if (frag.acked || frag.retries >= settings.maxRetries) continue;
       unsigned long start = millis();
-      while (millis() - start < RETRY_INTERVAL) {
+      while (millis() - start < settings.retryInterval) {
         uint8_t buf[128];
         int state = lora.receive(buf, sizeof(buf));
         if (state == RADIOLIB_ERR_NONE) {
@@ -314,108 +316,176 @@ void retryFragments() {
         }
         if (frag.acked) break;
       }
-
       if (!frag.acked) {
         int state = lora.transmit(frag.data, AES_BLOCK_LEN);
         if (state == RADIOLIB_ERR_NONE) {
           frag.timestamp = millis();
           frag.retries++;
-          Serial.printf("SEND|RETRY|%s|%d/%d|try=%d\n",
-              it->first.c_str(),
-              (&frag - &it->second[0]) + 1,
-              (int)it->second.size(),
-              frag.retries);
-        } else {
-          Serial.print("RETRY|FAIL|"); Serial.println(state);
+          Serial.printf("SEND|RETRY|%s|%d/%d|try=%d\n", it->first.c_str(),
+                        (&frag - &it->second[0]) + 1, (int)it->second.size(),
+                        frag.retries);
         }
-
         lora.startReceive();
       }
-
-      if (!frag.acked && frag.retries < MAX_RETRIES) allAcked = false;
+      if (!frag.acked && frag.retries < settings.maxRetries) allAcked = false;
     }
-
-    if (allAcked) it = outgoing.erase(it);
-    else ++it;
+    if (allAcked)
+      it = outgoing.erase(it);
+    else
+      ++it;
   }
 }
 
-// Send a beacon message
+// Original sendBeacon
 void sendBeacon() {
-  String beaconMsg = "BEACON";
-  sendEncryptedText(beaconMsg);
-  Serial.println("SEND|BEACON");
+  sendEncryptedText("BEACON");
+  Serial.println("LOG|BEACON_SENT");
 }
 
-// One-time initialization
-void setup() {
-  pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, HIGH);
-  pinMode(OLED_POWER_PIN, OUTPUT);
-  digitalWrite(OLED_POWER_PIN, LOW);
-  delay(100);
-  Wire.begin(SDA_OLED_PIN, SCL_OLED_PIN, 500000);
-  delay(100);
-  Serial.begin(115200);
-  while (!Serial);
-
-  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    Serial.println("INIT|OLED_FAILED. CHECK CONNECTIONS.");
-    for (;;) ;
+// Settings functions unchanged
+void loadSettings() {
+  EEPROM.begin(EEPROM_SIZE);
+  if (EEPROM.read(ADDR_MAGIC) != EEPROM_MAGIC) {
+    uint16_t cid = (uint16_t)((ESP.getEfuseMac() >> 32) & 0xFFFF);
+    snprintf(settings.deviceName, sizeof(settings.deviceName), "%04X", cid);
+    settings.frequency = 915.0;
+    settings.txPower = 22;
+    settings.maxRetries = 1;
+    settings.retryInterval = 1000;
+    settings.beaconInterval = 10000;
+    settings.beaconEnabled = true;
+    EEPROM.write(ADDR_MAGIC, EEPROM_MAGIC);
+    EEPROM.put(ADDR_SETTINGS, settings);
+    EEPROM.commit();
+  } else {
+    EEPROM.get(ADDR_SETTINGS, settings);
   }
+}
 
-  display.clearDisplay();
+void saveSettings() {
+  EEPROM.put(ADDR_SETTINGS, settings);
+  EEPROM.commit();
+}
 
-  // Reaper logo and text
-  display.fillCircle(64, 24, 12, SSD1306_WHITE);
-  display.fillCircle(64, 27, 12, SSD1306_BLACK);
-  display.fillCircle(64, 30, 7, SSD1306_WHITE);
-  display.fillCircle(61, 29, 1, SSD1306_BLACK);
-  display.fillCircle(67, 29, 1, SSD1306_BLACK);
-  display.drawLine(72, 18, 78, 36, SSD1306_WHITE);
-  display.drawLine(76, 14, 82, 22, SSD1306_WHITE);
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(8, 54);
-  display.print("Reaper - v" REAPER_VERSION);
-  display.display();
-
-  aes.setKey(aes_key, sizeof(aes_key));
-  uint64_t chipId = ESP.getEfuseMac();
-  snprintf(deviceName, sizeof(deviceName), "%04X", (uint16_t)((chipId >> 32) & 0xFFFF));
-
-  int state = lora.begin(FREQUENCY);
-  if (state != RADIOLIB_ERR_NONE) {
-    Serial.print("ERR|INIT_FAIL|"); Serial.println(state);
-    while (true);
-  }
-
+void applySettings() {
+  lora.begin(settings.frequency);
   lora.setBandwidth(BANDWIDTH);
   lora.setSpreadingFactor(SPREADING_FACTOR);
   lora.setCodingRate(CODING_RATE);
   lora.setPreambleLength(PREAMBLE_LENGTH);
   lora.setSyncWord(SYNC_WORD);
-  lora.setOutputPower(TX_POWER);
+  lora.setOutputPower(settings.txPower);
   lora.setCRC(true);
+}
 
-  Serial.print("INIT|LoRa Ready as "); Serial.println(deviceName);
-  delay(1000 + random(0, 1500));
+void setSetting(const String &k, const String &v) {
+  if (k == "name")
+    v.toCharArray(settings.deviceName, sizeof(settings.deviceName));
+  else if (k == "freq") {
+    float f = v.toFloat();
+    if (f >= 900.0 && f <= 915.0 &&
+        fabs(f - 900.0 - round((f - 900.0) / 4.0) * 4.0) < 0.01)
+      settings.frequency = f;
+  } else if (k == "power")
+    settings.txPower = v.toInt();
+  else if (k == "maxret")
+    settings.maxRetries = v.toInt();
+  else if (k == "retryint")
+    settings.retryInterval = v.toInt();
+  else if (k == "beaconint")
+    settings.beaconInterval = v.toInt();
+  else if (k == "beacon")
+    settings.beaconEnabled = v.equalsIgnoreCase("true");
+  else
+    Serial.println("ERR|UNKNOWN_SETTING");
+}
+
+void processATSetting(const String &cmd) {
+  int eq = cmd.indexOf('=');
+  String kv = cmd.substring(eq + 1);
+  int c = kv.indexOf(',');
+  setSetting(kv.substring(0, c), kv.substring(c + 1));
+  saveSettings();
+  Serial.println("RESTARTING");
+  delay(100);
+  ESP.restart();
+}
+
+void processATBulk(const String &cmd) {
+  String list = cmd.substring(cmd.indexOf('=') + 1);
+  int pos = 0;
+  while (pos < list.length()) {
+    int sc = list.indexOf(';', pos);
+    String pr = (sc < 0 ? list.substring(pos) : list.substring(pos, sc));
+    int c = pr.indexOf(',');
+    setSetting(pr.substring(0, c), pr.substring(c + 1));
+    pos = (sc < 0 ? list.length() : sc + 1);
+  }
+  saveSettings();
+  Serial.println("RESTARTING");
+  delay(100);
+  ESP.restart();
+}
+
+void setup() {
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(OLED_POWER_PIN, OUTPUT);
+  digitalWrite(OLED_POWER_PIN, LOW);
+  delay(50);
+  Wire.begin(SDA_OLED_PIN, SCL_OLED_PIN, 500000);
+  Serial.begin(115200);
+  while (!Serial);
+
+  loadSettings();
+  applySettings();
+
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("LOG|OLED_FAILED");
+    for (;;);
+  }
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.printf("Name:%s\nFreq:%.1f\nPwr:%d\n", settings.deviceName,
+                 settings.frequency, settings.txPower);
+  display.display();
+
+  aes.setKey(aes_key, sizeof(aes_key));
+  uint16_t cid = (uint16_t)((ESP.getEfuseMac() >> 32) & 0xFFFF);
+  snprintf(deviceName, sizeof(deviceName), "%04X", cid);
+
+  int st = lora.begin(settings.frequency);
+  if (st != RADIOLIB_ERR_NONE) {
+    Serial.printf("ERR|INIT_FAIL|%d\n", st);
+    while (1);
+  }
+  Serial.println("LOG|DEVICE_CONNECTED");
+  lora.setBandwidth(BANDWIDTH);
+  lora.setSpreadingFactor(SPREADING_FACTOR);
+  lora.setCodingRate(CODING_RATE);
+  lora.setPreambleLength(PREAMBLE_LENGTH);
+  lora.setSyncWord(SYNC_WORD);
+  lora.setOutputPower(settings.txPower);
+  lora.setCRC(true);
   lora.startReceive();
   digitalWrite(LED_PIN, LOW);
 }
 
-// Runtime logic
 void loop() {
   if (Serial.available()) {
-    String input = Serial.readStringUntil('\n');
-    input.trim();
-    if (input.startsWith("AT+MSG=")) {
-      sendEncryptedText(input.substring(7));
-    } else if (input.startsWith("AT+GPS=")) {
-      sendEncryptedText("GPS:" + input.substring(7));
-    } else {
+    String in = Serial.readStringUntil('\n');
+    in.trim();
+    if (in.startsWith("AT+SET="))
+      processATSetting(in);
+    else if (in.startsWith("AT+SETA="))
+      processATBulk(in);
+    else if (in.startsWith("AT+MSG="))
+      sendEncryptedText(in.substring(7));
+    else if (in.startsWith("AT+GPS="))
+      sendEncryptedText("GPS:" + in.substring(7));
+    else
       Serial.println("ERR|UNKNOWN_CMD");
-    }
   }
 
   uint8_t buf[128];
@@ -424,23 +494,22 @@ void loop() {
     processFragment(buf);
     lora.startReceive();
   } else if (state != RADIOLIB_ERR_RX_TIMEOUT) {
-    Serial.print("ERR|RX_FAIL|"); Serial.println(state);
+    Serial.printf("ERR|RX_FAIL|%d\n", state);
     lora.startReceive();
   }
 
   retryFragments();
 
-  // Handle beacon sending
   static unsigned long lastBeacon = 0;
-  static bool initBeaconSent = false;
-  if (!initBeaconSent) {
-    if (BEACON_ENABLED) {
-      sendBeacon();
-      lastBeacon = millis();
-    }
-    initBeaconSent = true;
-  } else if (BEACON_ENABLED && millis() - lastBeacon > BEACON_INTERVAL) {
+  static bool beaconSent = false;
+  unsigned long now = millis();
+
+  if (!beaconSent) {
     sendBeacon();
-    lastBeacon = millis();
+    lastBeacon = now;
+    beaconSent = true;
+  } else if (now - lastBeacon >= settings.beaconInterval) {
+    sendBeacon();
+    lastBeacon = now;
   }
 }
