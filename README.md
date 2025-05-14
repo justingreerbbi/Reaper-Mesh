@@ -154,14 +154,6 @@ git https://github.com/justingreerbbi/Reaper-Net/
 
 3. In the monitor, you can copy and paste any of the example commands and the device will do the rest.
 
-The commands and return in the serial monitor are designed to be software friendly. You can tie in your own GUI and so what you with with the serial data.
-
-All serial responses are structured for sanity. Sections are separated by "|".
-
-1. SEND|FRAG|MSGID=12736|SEQ=1/X|TRY=1 - Lines that start with SEND is a log for you to know that the device is broadcasting a message. This structure allows you to provide a progress bar by parsing the SEQ section. 1/3 means 33%, etc.
-
-2. RECV|ACK_CONFIRM|MSGID - ACK message. The Device received a confirmation that a device has received the message fully.
-
 ### Dependencies
 
 -   [RadioLib](https://github.com/jgromes/RadioLib)
