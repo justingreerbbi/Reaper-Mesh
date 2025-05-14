@@ -8,8 +8,8 @@ SX1262 lora = new Module(8, 14, 12, 13);  // Heltec V3.2
 
 #define FREQUENCY        915.0
 #define BANDWIDTH        500.0
-#define SPREADING_FACTOR 12
-#define CODING_RATE      5
+#define SPREADING_FACTOR 9
+#define CODING_RATE      6
 #define PREAMBLE_LENGTH  12
 #define SYNC_WORD        0xF3
 #define TX_POWER         14
@@ -79,12 +79,20 @@ void setup() {
 
   Serial.println("BOOT|Starting LoRa init...");
 
-  int state = lora.begin(FREQUENCY, BANDWIDTH, SPREADING_FACTOR, CODING_RATE, SYNC_WORD, PREAMBLE_LENGTH, TX_POWER);
+  int state = lora.begin(FREQUENCY);
   if (state != RADIOLIB_ERR_NONE) {
     Serial.print("ERR|INIT_FAIL|");
     Serial.println(state);
     while (true);
   }
+
+  lora.setBandwidth(BANDWIDTH);
+  lora.setSpreadingFactor(SPREADING_FACTOR);
+  lora.setCodingRate(CODING_RATE);
+  lora.setPreambleLength(PREAMBLE_LENGTH);
+  lora.setSyncWord(SYNC_WORD);
+  lora.setOutputPower(TX_POWER);
+  lora.setCRC(true);
 
   Serial.print("INIT|LoRa ready as ");
   Serial.println(deviceName);
@@ -131,8 +139,6 @@ void retryFailedMessages() {
       int state = lora.transmit((uint8_t*)pending.message.c_str(), pending.message.length());
 
       if (state == RADIOLIB_ERR_NONE) {
-        Serial.print("RETRY|SENT|");
-        Serial.println(pending.message);
         pending.timestamp = millis();
         pending.retries++;
         awaitingAck = true;
@@ -207,7 +213,6 @@ void loop() {
       Serial.print("|ID=");
       Serial.println(msgId);
 
-      // ✅ ACK format: ACK|<deviceName>|<msgId>
       String ackMsg = "ACK|" + String(deviceName) + "|" + msgId;
       if (ackMsg.length() <= MAX_PAYLOAD_LEN) {
         int ackState = lora.transmit((uint8_t*)ackMsg.c_str(), ackMsg.length());
