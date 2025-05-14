@@ -190,7 +190,7 @@ void processFragment(uint8_t* buf) {
     }
     msg.received[seq] = true;
 
-    Serial.printf("FRAG|RECV|%s|%d/%d\n", msgId.c_str(), seq + 1, total);
+    Serial.printf("RECV|FRAG|%s|%d/%d\n", msgId.c_str(), seq + 1, total);
 
     uint8_t ack[AES_BLOCK_LEN] = {0};
     ack[0] = TYPE_ACK_FRAGMENT;
