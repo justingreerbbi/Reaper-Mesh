@@ -5,12 +5,23 @@
 Reaper Mesh is a LoRa communication device specifically designed for Reaper Net but will soon be updated that is
 can be used via a dedicated mobile devices.
 
+To make this as easy as possible to use, I have designed serial commands in the AT+ formatted. There is no need for protobufs to use this product. As of now, the firmware is only for the HeltecV3 lora device. It currently works off of static variables for the device settings but this will soon be updated to by adjustable. The firmware is set to 915 for the frequency but I do plan on adding in the ability to set "channels" so that this can be changed to enter into a private channel.
+
+The firmware does use AES encryption for messages out of the box. I undertsand this is not ideal but for now it is a place holder for stronger encryption which will be on a seperate device instead of on the device itself.
+
+While bound to the rate limit, theroticlly there is no limit to the length of data that can be sent thanks to fragmentation. Each messsage is autopmaticlly broken 
+into segments that are encrypted and can be peiced back together on the other side. I have tested a 3KB image and it worked fine but took some time. They data type you choose to use is important along with the file size.
+
+## Techicals
+
+**Commands**
+
+- AT+MSG=YOUR MESSAGE HERE.
+- AT+GPS=lat,lng
+
 ## Features
 
--   Long Range Communications
--   Multi-Channel
--   Scan Mode
--   Encryption Available
+-   Long range communications for off-grid communication.
 
 ## Table of Contents
 
