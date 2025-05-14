@@ -68,6 +68,7 @@ AT+GPS=latitude,longitude
 ```
 
 **EXAMPLES**
+
 -   AT+MSG=Aplha Team in place. Processding to next objective.
 
 ### Message Types
@@ -80,29 +81,63 @@ AT+GPS=latitude,longitude
 ## Features
 
 -   AES-encrypted messages.
--   Binary Fragmentation is used to be able to transmit data over the noraml limits of LoRa. 
+-   Binary Fragmentation is used to be able to transmit data over the noraml limits of LoRa.
 -   Simple serial `AT+` command interface with formatted responses for software integration.
 -   Integrated retry system until at least one node acknowledges the message.
 
 **Upcoming**
 
-- Low-power mode.
-- Multiple channel support.
-- Direct messaging.
-- Multiple node tracking.
-- OLED Information.
-- Ability to change settings including encryption keys.
-- Built in wireless Access Point with REST API and user interface.
-- Ability to load channel and keys via SD card (requires hardware development).
-- BLE connectivity with custom mobile application.
+-   Low-power mode.
+-   Multiple channel support.
+-   Direct messaging.
+-   Multiple node tracking.
+-   OLED Information.
+-   Ability to change settings including encryption keys.
+-   Built in wireless Access Point with REST API and user interface.
+-   Ability to load channel and keys via SD card (requires hardware development).
+-   BLE connectivity with custom mobile application.
 
 ---
 
 ## How to use
 
-This firmware provides no user interface to the device currently. Everything is done via Serail commuinications on Buadrate 115200. Connecting to the device can be done via a USB cable or through serial connections from another MCU.
+This firmware provides no user interface to the device currently. Everything is done via Serial communications on Baud rate 115200. Connecting to the device can be done via a USB cable or through serial connections from another MCU.
 
 As the project becomes more stable, I will be adding more ways to take advantage of the communication between nodes.
+
+## Understand Serial Responses
+
+Each response from the device has a simple format it follows. All responses are separated by the character "|". The first index will be LOG,RECV,SEND, or ERR.
+
+**Receiving LOG Example**
+LOG responses can be used to hook into or simply display as a log in your application. The give a keyword of what the LOG is for.
+
+-   `LOG|DEVICE_CONNECTED`
+-   `LOG|BEACON_SENT`
+
+**Receiving a Beacon Example**
+The example below shows a normal message coming in but after decrypting, the content is a beacon ping from another node. They are saying "Hi, I'm Here!"
+
+-   `RECV|FRAG|F305|1/1`
+-   `RECV|28C6|BEACON|F305`
+
+**SEND/RECV Example**
+Below is an example of sending a message that has 5 fragments followed by a `RECV|ACK_CONFIRM`. The ACK_CONFIRM is a receipt confirmation that a node as received the message.
+
+AT+ command to send a message
+
+-   `AT+MSG=Hello World`
+
+Serial Output
+
+-   `SEND|FRAG|56FA|1/5|TRY=1`
+-   `SEND|FRAG|56FA|2/5|TRY=1`
+-   `SEND|FRAG|56FA|3/5|TRY=1`
+-   `SEND|FRAG|56FA|4/5|TRY=1`
+-   `SEND|FRAG|56FA|5/5|TRY=1`
+-   `RECV|ACK_CONFIRM|56FA`
+
+NOTE: the RECV|ACK_CONFIRM response as the MSG_ID to let you know which message they confirmed they received.
 
 ## Installation
 
@@ -142,6 +177,18 @@ AT+MSG=Moving to location now
 AT+MSG=I am at Rally Point Alpha. Fire when ready.
 AT+MSG=!THIS IS A HIGH PRIORITY MESSAGE
 AT+GPS=38.8977,-77.0365
+```
+
+**UPDATE SETTINGS**
+
+```text
+SET|<key>|<value>
+----
+AT+SET=name,55T5
+AT+SET=freq,915.0
+AT+SET=power,22
+AT+SET=maxret,2
+AT+SET=retryint,1000
 ```
 
 ---
