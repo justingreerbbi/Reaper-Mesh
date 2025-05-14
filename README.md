@@ -67,6 +67,9 @@ AT+MSG=YOUR MESSAGE HERE
 AT+GPS=latitude,longitude
 ```
 
+**EXAMPLES**
+-   AT+MSG=Aplha Team in place. Processding to next objective.
+
 ### Message Types
 
 -   `AT+MSG=` – Sends a secure text message.

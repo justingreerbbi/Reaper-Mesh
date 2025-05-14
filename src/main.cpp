@@ -4,8 +4,11 @@
 #include <string.h>
 #include <vector>
 #include <map>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
 
-SX1262 lora = new Module(8, 14, 12, 13);  // Heltec V3.2 pins
+#define REAPER_VERSION "1.77.6"
 
 #define FREQUENCY        915.0
 #define BANDWIDTH        500.0
@@ -32,6 +35,19 @@ SX1262 lora = new Module(8, 14, 12, 13);  // Heltec V3.2 pins
 
 #define BROADCAST_MEMORY_TIME 30000
 #define REQ_TIMEOUT 2000
+
+#define LED_PIN 35
+
+#define SCREEN_WIDTH 128 // OLED display width, in pixels
+#define SCREEN_HEIGHT 64 // OLED display height, in pixels
+
+#define OLED_POWER_PIN 36
+#define RST_OLED_PIN 21
+#define SCL_OLED_PIN 18
+#define SDA_OLED_PIN 17
+
+SX1262 lora = new Module(8, 14, 12, 13);  // Heltec V3.2 pins
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, RST_OLED_PIN);
 
 char deviceName[16];
 AES128 aes;
@@ -246,6 +262,11 @@ void processFragment(uint8_t* buf) {
     }
 
   } else if (type == TYPE_ACK_CONFIRM) {
+
+    digitalWrite(LED_PIN, HIGH);
+    delay(1000);
+    digitalWrite(LED_PIN, LOW);
+
     Serial.print("RECV|ACK_CONFIRM|");
     String msgId = String((buf[1] << 8) | buf[2], HEX);
     msgId.toUpperCase();
@@ -315,14 +336,80 @@ void retryFragments() {
   }
 }
 
+/**
+ * @brief Setup function
+ * 
+ * MAIN SETUP
+ * Initializes the LoRa module, sets the AES key, and starts receiving data.
+ */
 void setup() {
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(OLED_POWER_PIN, OUTPUT);
+  digitalWrite(OLED_POWER_PIN, LOW);
+  delay(100);
+  Wire.begin(SDA_OLED_PIN, SCL_OLED_PIN, 500000);
+  delay(100);
+
+  // Turn on the LED
+  digitalWrite(LED_PIN, HIGH);
+
   Serial.begin(115200);
   while (!Serial);
 
+  // Check to ensure that the OLED display is connected
+  if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("INIT|OLED_FAILED. CHECK CONNECTIONS.");
+    for(;;); // Don't proceed, loop forever
+  }
+
+  // Initialize the display.
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  display.clearDisplay();
+
+  // Draw a small "reaper" icon (skull with hood) in the center of the screen
+  int centerX = SCREEN_WIDTH / 2;
+  int centerY = SCREEN_HEIGHT / 2 - 8;
+
+  // Draw hood (semicircle)
+  display.fillCircle(centerX, centerY, 12, SSD1306_WHITE);
+  display.fillCircle(centerX, centerY + 3, 12, SSD1306_BLACK);
+
+  // Draw face (skull)
+  display.fillCircle(centerX, centerY + 6, 7, SSD1306_WHITE);
+
+  // Draw eyes
+  display.fillCircle(centerX - 3, centerY + 5, 1, SSD1306_BLACK);
+  display.fillCircle(centerX + 3, centerY + 5, 1, SSD1306_BLACK);
+
+  // Draw mouth (simple line)
+  //display.drawFastHLine(centerX - 2, centerY + 10, 5, SSD1306_BLACK);
+
+  // Draw scythe handle
+  display.drawLine(centerX + 8, centerY - 6, centerX + 14, centerY + 12, SSD1306_WHITE);
+
+  // Draw scythe blade
+  display.drawLine(centerX + 12, centerY - 10, centerX + 18, centerY - 2, SSD1306_WHITE);
+
+  // Draw "Reaper Mesh" text under the flower
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  String title = "Reaper Mesh - v" + String(REAPER_VERSION);
+  int16_t x1, y1;
+  uint16_t w, h;
+  display.getTextBounds(title, 0, 0, &x1, &y1, &w, &h);
+  int textX = (SCREEN_WIDTH - w) / 2;
+  int textY = SCREEN_HEIGHT - h - 2; // 2 pixels above the bottom edge
+  display.setCursor(textX, textY);
+  display.print(title);
+
+  display.display();
+
+  // Set the AES key for encryption/decryption
   aes.setKey(aes_key, sizeof(aes_key));
   uint64_t chipId = ESP.getEfuseMac();
   snprintf(deviceName, sizeof(deviceName), "%04X", (uint16_t)((chipId >> 32) & 0xFFFF));
 
+  // Initialize the LoRa module on teh frequency defined above
   int state = lora.begin(FREQUENCY);
   if (state != RADIOLIB_ERR_NONE) {
     Serial.print("ERR|INIT_FAIL|"); Serial.println(state);
@@ -340,6 +427,9 @@ void setup() {
   Serial.print("INIT|LoRa Ready as "); Serial.println(deviceName);
   delay(1000 + random(0, 1500));
   lora.startReceive();
+
+  // Turn off the LED
+  digitalWrite(LED_PIN, LOW);
 }
 
 void loop() {
