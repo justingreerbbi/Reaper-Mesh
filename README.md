@@ -110,18 +110,21 @@ As the project becomes more stable, I will be adding more ways to take advantage
 Each response from the device has a simple format it follows. All responses are separated by the character "|". The first index will be LOG,RECV,SEND, or ERR.
 
 **Receiving LOG Example**
+
 LOG responses can be used to hook into or simply display as a log in your application. The give a keyword of what the LOG is for.
 
 -   `LOG|DEVICE_CONNECTED`
 -   `LOG|BEACON_SENT`
 
 **Receiving a Beacon Example**
+
 The example below shows a normal message coming in but after decrypting, the content is a beacon ping from another node. They are saying "Hi, I'm Here!"
 
 -   `RECV|FRAG|F305|1/1`
 -   `RECV|28C6|BEACON|F305`
 
 **SEND/RECV Example**
+
 Below is an example of sending a message that has 5 fragments followed by a `RECV|ACK_CONFIRM`. The ACK_CONFIRM is a receipt confirmation that a node as received the message.
 
 AT+ command to send a message
