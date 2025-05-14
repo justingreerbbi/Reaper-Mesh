@@ -207,7 +207,8 @@ void loop() {
       Serial.print("|ID=");
       Serial.println(msgId);
 
-      String ackMsg = "ACK|" + String(deviceName) + "|for:" + received;
+      // ✅ ACK format: ACK|<deviceName>|<msgId>
+      String ackMsg = "ACK|" + String(deviceName) + "|" + msgId;
       if (ackMsg.length() <= MAX_PAYLOAD_LEN) {
         int ackState = lora.transmit((uint8_t*)ackMsg.c_str(), ackMsg.length());
         if (ackState == RADIOLIB_ERR_NONE) {
