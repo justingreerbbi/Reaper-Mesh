@@ -13,7 +13,7 @@ SX1262 lora = new Module(8, 14, 12, 13);  // Heltec V3.2
 #define CODING_RATE      6
 #define PREAMBLE_LENGTH  12
 #define SYNC_WORD        0xF3
-#define TX_POWER         14
+#define TX_POWER         22
 
 #define MAX_RETRIES      3
 #define RETRY_INTERVAL   5000  // ms
