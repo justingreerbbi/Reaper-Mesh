@@ -3,6 +3,7 @@
 #include <AES.h>
 #include <string.h>
 #include <vector>
+#include <map>
 
 SX1262 lora = new Module(8, 14, 12, 13);  // Heltec V3.2
 
@@ -14,78 +15,140 @@ SX1262 lora = new Module(8, 14, 12, 13);  // Heltec V3.2
 #define SYNC_WORD        0xF3
 #define TX_POWER         14
 
-#define MAX_PAYLOAD_LEN  240
 #define MAX_RETRIES      3
 #define RETRY_INTERVAL   5000  // ms
+#define FRAG_DATA_LEN    11    // encrypted fragment data payload
+#define AES_BLOCK_LEN    16
 
 char deviceName[16];
-bool awaitingAck = false;
-unsigned long lastSendTime = 0;
-String lastSentMessage = "";
-
 AES128 aes;
 uint8_t aes_key[16] = {
   0x60, 0x3D, 0xEB, 0x10, 0x15, 0xCA, 0x71, 0xBE,
   0x2B, 0x73, 0xAE, 0xF0, 0x85, 0x7D, 0x77, 0x81
 };
 
-struct PendingMessage {
-  String message;
-  int retries = 0;
-  unsigned long timestamp = 0;
+struct Fragment {
+  uint8_t data[AES_BLOCK_LEN];
+  int retries;
+  unsigned long timestamp;
 };
 
-std::vector<PendingMessage> retryBuffer;
+struct IncomingText {
+  int total;
+  unsigned long start;
+  std::map<uint8_t, String> parts;
+};
 
-String encryptPayload(String plain) {
-  uint8_t block[32] = {0};
-  strncpy((char*)block, plain.c_str(), sizeof(block));
-  for (int i = 0; i < 32; i += 16) {
-    aes.encryptBlock(block + i, block + i);
-  }
+std::map<String, std::vector<Fragment>> outgoing;
+std::map<String, IncomingText> incoming;
 
-  char hex[65] = {0};
-  for (int i = 0; i < 32; i++) {
-    sprintf(hex + i * 2, "%02X", block[i]);
-  }
-  return String(hex);
+String generateMsgID() {
+  char buf[7];
+  snprintf(buf, sizeof(buf), "%04X", (uint16_t)esp_random());
+  return String(buf);
 }
 
-String decryptPayload(String hex) {
-  uint8_t block[32] = {0};
-  for (int i = 0; i < 32 && i * 2 + 1 < hex.length(); i++) {
-    sscanf(hex.c_str() + i * 2, "%2hhx", &block[i]);
+void encryptFragment(uint8_t* input) {
+  aes.encryptBlock(input, input);
+}
+
+void decryptFragment(uint8_t* input) {
+  aes.decryptBlock(input, input);
+}
+
+void sendEncryptedText(String msg) {
+  std::vector<Fragment> frags;
+  String msgId = generateMsgID();
+  int total = (msg.length() + FRAG_DATA_LEN - 1) / FRAG_DATA_LEN;
+
+  for (int i = 0; i < total; i++) {
+    uint8_t block[AES_BLOCK_LEN] = {0};
+    block[0] = 0x03;  // text fragment
+    block[1] = (uint8_t)(msgId.toInt() >> 8);
+    block[2] = (uint8_t)(msgId.toInt() & 0xFF);
+    block[3] = (uint8_t)i;
+    block[4] = (uint8_t)total;
+
+    String chunk = msg.substring(i * FRAG_DATA_LEN, (i + 1) * FRAG_DATA_LEN);
+    memcpy(&block[5], chunk.c_str(), chunk.length());
+    encryptFragment(block);
+
+    Fragment frag;
+    memcpy(frag.data, block, AES_BLOCK_LEN);
+    frag.retries = 0;
+    frag.timestamp = millis();
+    frags.push_back(frag);
+  }
+  outgoing[msgId] = frags;
+}
+
+void processFragment(uint8_t* buf) {
+  decryptFragment(buf);
+  if (buf[0] != 0x03) return;
+
+  String msgId = String((buf[1] << 8) | buf[2], HEX);
+  uint8_t seq = buf[3];
+  uint8_t total = buf[4];
+  String part = "";
+
+  for (int i = 5; i < AES_BLOCK_LEN; i++) {
+    if (buf[i] == 0x00) break;
+    part += (char)buf[i];
   }
 
-  for (int i = 0; i < 32; i += 16) {
-    aes.decryptBlock(block + i, block + i);
-  }
+  IncomingText& msg = incoming[msgId];
+  msg.total = total;
+  msg.parts[seq] = part;
+  msg.start = millis();
 
-  char output[33] = {0};
-  strncpy(output, (char*)block, 32);
-  return String(output);
+  if (msg.parts.size() == total) {
+    String complete;
+    for (int i = 0; i < total; i++) complete += msg.parts[i];
+    Serial.print("RECV|TEXT|");
+    Serial.print(msgId);
+    Serial.print("|MSG=");
+    Serial.println(complete);
+    incoming.erase(msgId);
+  }
+}
+
+void retryFragments() {
+  for (auto it = outgoing.begin(); it != outgoing.end(); ) {
+    bool allDone = true;
+    for (auto& frag : it->second) {
+      if (frag.retries >= MAX_RETRIES) continue;
+      if (millis() - frag.timestamp >= RETRY_INTERVAL) {
+        int state = lora.transmit(frag.data, AES_BLOCK_LEN);
+        if (state == RADIOLIB_ERR_NONE) {
+          frag.timestamp = millis();
+          frag.retries++;
+          Serial.print("RETRY|SEND|");
+          for (int i = 0; i < AES_BLOCK_LEN; i++) Serial.printf("%02X", frag.data[i]);
+          Serial.println();
+        } else {
+          Serial.print("RETRY|FAIL|");
+          Serial.println(state);
+        }
+      }
+      if (frag.retries < MAX_RETRIES) allDone = false;
+    }
+    if (allDone) it = outgoing.erase(it);
+    else ++it;
+  }
 }
 
 void setup() {
   Serial.begin(115200);
   while (!Serial);
-
+  aes.setKey(aes_key, sizeof(aes_key));
   uint64_t chipId = ESP.getEfuseMac();
   snprintf(deviceName, sizeof(deviceName), "NODE-%04X", (uint16_t)(chipId & 0xFFFF));
 
-  randomSeed(esp_random());
-
-  aes.setKey(aes_key, sizeof(aes_key));
-
-  Serial.println("BOOT|Starting LoRa init...");
-
   int state = lora.begin(FREQUENCY);
   if (state != RADIOLIB_ERR_NONE) {
-    Serial.print("ERR|INIT_FAIL|");
-    Serial.println(state);
+    Serial.print("ERR|INIT_FAIL|"); Serial.println(state);
     while (true);
   }
-
   lora.setBandwidth(BANDWIDTH);
   lora.setSpreadingFactor(SPREADING_FACTOR);
   lora.setCodingRate(CODING_RATE);
@@ -93,83 +156,17 @@ void setup() {
   lora.setSyncWord(SYNC_WORD);
   lora.setOutputPower(TX_POWER);
   lora.setCRC(true);
-
-  Serial.print("INIT|LoRa ready as ");
-  Serial.println(deviceName);
+  Serial.print("INIT|LoRa Ready as "); Serial.println(deviceName);
   lora.startReceive();
-}
-
-void sendMessage(String msg) {
-  if (msg.length() > MAX_PAYLOAD_LEN) {
-    Serial.println("ERR|MSG_TOO_LONG");
-    return;
-  }
-
-  delay(random(50, 200));
-  int state = lora.transmit((uint8_t*)msg.c_str(), msg.length());
-  if (state == RADIOLIB_ERR_NONE) {
-    Serial.print("SEND|OK|");
-    Serial.println(msg);
-    lastSentMessage = msg;
-    lastSendTime = millis();
-    awaitingAck = true;
-  } else {
-    Serial.print("ERR|TX_FAIL|");
-    Serial.println(state);
-  }
-
-  lora.startReceive();
-}
-
-void retryFailedMessages() {
-  for (int i = 0; i < retryBuffer.size(); i++) {
-    PendingMessage& pending = retryBuffer[i];
-    if (millis() - pending.timestamp >= RETRY_INTERVAL) {
-      if (pending.retries >= MAX_RETRIES) {
-        Serial.print("DROP|GIVE_UP|");
-        Serial.println(pending.message);
-        retryBuffer.erase(retryBuffer.begin() + i);
-        i--;
-        continue;
-      }
-
-      Serial.print("RETRY|");
-      Serial.println(pending.message);
-      delay(random(50, 150));
-      int state = lora.transmit((uint8_t*)pending.message.c_str(), pending.message.length());
-
-      if (state == RADIOLIB_ERR_NONE) {
-        pending.timestamp = millis();
-        pending.retries++;
-        awaitingAck = true;
-        lastSendTime = millis();
-      } else {
-        Serial.print("RETRY|FAIL|");
-        Serial.println(state);
-      }
-
-      lora.startReceive();
-    }
-  }
 }
 
 void loop() {
   if (Serial.available()) {
     String input = Serial.readStringUntil('\n');
     input.trim();
-
     if (input.startsWith("AT+MSG=")) {
-      String rawPayload = input.substring(7);
-      String encrypted = encryptPayload(rawPayload);
-      String formatted = "MSG|" + String(deviceName) + "|" + encrypted + "|" + String(millis());
-
-      sendMessage(formatted);
-
-      PendingMessage pending;
-      pending.message = formatted;
-      pending.retries = 0;
-      pending.timestamp = millis();
-      retryBuffer.push_back(pending);
+      String msg = input.substring(7);
+      sendEncryptedText(msg);
     } else {
       Serial.println("ERR|UNKNOWN_CMD");
     }
@@ -178,61 +175,12 @@ void loop() {
   uint8_t buf[128];
   int state = lora.receive(buf, sizeof(buf));
   if (state == RADIOLIB_ERR_NONE) {
-    String received = (char*)buf;
-    Serial.print("RECV|RAW|");
-    Serial.println(received);
-
-    if (received.startsWith("ACK|")) {
-      String ackId = received.substring(received.lastIndexOf('|') + 1);
-      for (int i = 0; i < retryBuffer.size(); i++) {
-        String sentId = retryBuffer[i].message.substring(retryBuffer[i].message.lastIndexOf('|') + 1);
-        if (ackId == sentId) {
-          Serial.print("ACK|CONFIRMED|");
-          Serial.println(retryBuffer[i].message);
-          retryBuffer.erase(retryBuffer.begin() + i);
-          break;
-        }
-      }
-      awaitingAck = false;
-
-    } else if (received.startsWith("MSG|")) {
-      int p1 = received.indexOf('|');
-      int p2 = received.indexOf('|', p1 + 1);
-      int p3 = received.indexOf('|', p2 + 1);
-
-      String sender = received.substring(p1 + 1, p2);
-      String encrypted = received.substring(p2 + 1, p3);
-      String msgId = received.substring(p3 + 1);
-
-      String message = decryptPayload(encrypted);
-
-      Serial.print("RECV|FROM=");
-      Serial.print(sender);
-      Serial.print("|MSG=");
-      Serial.print(message);
-      Serial.print("|ID=");
-      Serial.println(msgId);
-
-      String ackMsg = "ACK|" + String(deviceName) + "|" + msgId;
-      if (ackMsg.length() <= MAX_PAYLOAD_LEN) {
-        int ackState = lora.transmit((uint8_t*)ackMsg.c_str(), ackMsg.length());
-        if (ackState == RADIOLIB_ERR_NONE) {
-          Serial.print("SEND|");
-          Serial.println(ackMsg);
-        } else {
-          Serial.print("ERR|ACK_TX_FAIL|");
-          Serial.println(ackState);
-        }
-      }
-    }
-
+    processFragment(buf);
     lora.startReceive();
-    awaitingAck = false;
   } else if (state != RADIOLIB_ERR_RX_TIMEOUT) {
     Serial.print("ERR|RX_FAIL|");
     Serial.println(state);
     lora.startReceive();
   }
-
-  retryFailedMessages();
+  retryFragments();
 }
