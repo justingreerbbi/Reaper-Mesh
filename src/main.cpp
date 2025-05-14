@@ -99,12 +99,32 @@ std::map<String, unsigned long> recentMsgs;
 void processFragment(uint8_t* buf);
 void processAck(uint8_t* buf);
 
+/**
+ * @brief Generates a unique message ID.
+ * 
+ * This function generates a unique message ID by using the esp_random() function
+ * to create a random number and formatting it as a hexadecimal string.
+ * The ID is 4 hexadecimal digits long.
+ * 
+ * @return A string representing the unique message ID.
+ *         The ID is formatted as a 4-digit hexadecimal number.
+ */
 String generateMsgID() {
   char buf[7];
   snprintf(buf, sizeof(buf), "%04X", (uint16_t)esp_random());
   return String(buf);
 }
 
+/**
+ * @brief Checks if a message ID is recent and updates the recent messages map.
+ * 
+ * This function checks if a message ID has been seen recently (within a defined time limit).
+ * If the message ID is found, it returns true. Otherwise, it adds the message ID to the recent messages map
+ * and returns false.
+ * 
+ * @param msgId The message ID to check.
+ * @return true if the message ID is recent, false otherwise.
+ */
 bool isRecentMessage(String msgId) {
   unsigned long now = millis();
   for (auto it = recentMsgs.begin(); it != recentMsgs.end(); ) {
@@ -213,12 +233,10 @@ void processFragment(uint8_t* buf) {
     }
 
     IncomingText& msg = incoming[msgId];
-
     if (msg.received.size() != total) {
       msg.total = total;
       msg.received.assign(total, false);
     }
-
     msg.parts[seq]    = part;
     msg.received[seq] = true;
     
@@ -242,6 +260,7 @@ void processFragment(uint8_t* buf) {
       }
 
       // Send ACK_CONFIRM
+      // @TODO: There is a bug in teh module or code that requires the transmit to be called twice for the call to actually go out.
       uint8_t ackConfirm[AES_BLOCK_LEN] = {0};
       ackConfirm[0] = TYPE_ACK_CONFIRM;
       ackConfirm[1] = buf[1];
