@@ -1,3 +1,18 @@
+/**
+ * @brief Sends an encrypted text message over LoRa, fragmenting it as needed.
+ * 
+ * This function prepares a message for transmission by:
+ * - Checking for high priority (if the message starts with '!').
+ * - Prefixing the message with the device name.
+ * - Generating a unique message ID.
+ * - Splitting the message into fragments, each fitting within the AES block size.
+ * - Encrypting each fragment using AES-128.
+ * - Transmitting each fragment twice for reliability.
+ * - Storing the fragments in the outgoing map for possible retries.
+ * 
+ * @param msg The plaintext message to send. If it starts with '!', it is sent as high priority.
+ */
+void sendEncryptedText(String msg);
 #include <RadioLib.h>
 #include <Crypto.h>
 #include <AES.h>
@@ -49,7 +64,15 @@
 SX1262 lora = new Module(8, 14, 12, 13);  // Heltec V3.2 pins
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, RST_OLED_PIN);
 
+// Flag variables
+bool isReceiving_flag = false;
+bool isSending_flag = false;
+bool retry_flag = false;
+
+// Device Name Holder
 char deviceName[16];
+
+// AES encryption/decryption
 AES128 aes;
 uint8_t aes_key[16] = {
   0x60, 0x3D, 0xEB, 0x10, 0x15, 0xCA, 0x71, 0xBE,
@@ -106,6 +129,15 @@ void decryptFragment(uint8_t* input) {
   aes.decryptBlock(input, input);
 }
 
+/**
+ * @brief Sends a verification request for a specific message ID.
+ * 
+ * This function constructs a verification request packet, encrypts it,
+ * and transmits it over LoRa. It also starts the receiving process
+ * after sending.
+ * 
+ * @param msgId The message ID to verify.
+ */
 void sendVerifyRequest(const String& msgId) {
   uint8_t verify[AES_BLOCK_LEN] = {0};
   verify[0] = TYPE_VERIFY_REQUEST;
@@ -118,6 +150,20 @@ void sendVerifyRequest(const String& msgId) {
   lora.startReceive();
 }
 
+/**
+ * @brief Sends an encrypted text message over LoRa, fragmenting it as needed.
+ * 
+ * This function prepares a message for transmission by:
+ * - Checking for high priority (if the message starts with '!').
+ * - Prefixing the message with the device name.
+ * - Generating a unique message ID.
+ * - Splitting the message into fragments, each fitting within the AES block size.
+ * - Encrypting each fragment using AES-128.
+ * - Transmitting each fragment twice for reliability.
+ * - Storing the fragments in the outgoing map for possible retries.
+ * 
+ * @param msg The plaintext message to send. If it starts with '!', it is sent as high priority.
+ */
 void sendEncryptedText(String msg) {
   bool highPriority = false;
   if (msg.startsWith("!")) {
@@ -166,6 +212,23 @@ void sendEncryptedText(String msg) {
   //sendVerifyRequest(msgId);
 }
 
+/**
+ * @brief Processes incoming confirmation messages.
+ * 
+ * This function handles the decryption of received confirmation messages,
+ * checks their type, and updates the status of the corresponding
+ * fragments in the outgoing map. It also manages the acknowledgment
+ * of received fragments.
+ * 
+ * @note The function expects the incoming buffer to be already decrypted.
+ * It checks the message type and processes it accordingly.
+ * 
+ * @param buf The buffer containing the incoming message.
+ *            The first byte indicates the message type.
+ *            The second and third bytes represent the message ID.
+ * *          The next six bytes contain the result of the confirmation.
+ *            The function prints the confirmation result to the serial output.
+ */
 void processConfirm(uint8_t* buf) {
   decryptFragment(buf);
   if (buf[0] != TYPE_VERIFY_REPLY) return;
@@ -181,6 +244,13 @@ void processConfirm(uint8_t* buf) {
   }
 }
 
+/**
+ * @brief Processes incoming fragments and acknowledgments.
+ * 
+ * This function handles the decryption of received fragments, checks their type,
+ * and processes them accordingly. It also manages the acknowledgment of received
+ * fragments and the assembly of complete messages.
+ */
 void processFragment(uint8_t* buf) {
   decryptFragment(buf);
   uint8_t type = buf[0];
@@ -272,9 +342,19 @@ void processFragment(uint8_t* buf) {
     msgId.toUpperCase();
     Serial.print(msgId);
     Serial.println();
+
+    // Set the retry flag for the message to false.
+    retry_flag = false;
   }
 }
 
+/**
+ * @brief Processes acknowledgment messages.
+ * 
+ * This function handles the decryption of received acknowledgment messages,
+ * checks their type, and updates the status of the corresponding fragments
+ * in the outgoing map.
+ */
 void processAck(uint8_t* buf) {
   decryptFragment(buf);
   if (buf[0] != TYPE_ACK_FRAGMENT) return;
@@ -289,6 +369,14 @@ void processAck(uint8_t* buf) {
   }
 }
 
+/**
+ * @brief Retries sending fragments that have not been acknowledged.
+ * 
+ * This function checks the outgoing fragments for any that have not been acknowledged
+ * and attempts to resend them. It also handles the case where a fragment has
+ * exceeded the maximum number of retries. If a fragment is acknowledged during
+ * the retry process, it is marked as such.
+ */
 void retryFragments() {
   for (auto it = outgoing.begin(); it != outgoing.end(); ) {
     bool allAcked = true;
@@ -339,21 +427,33 @@ void retryFragments() {
 /**
  * @brief Setup function
  * 
- * MAIN SETUP
- * Initializes the LoRa module, sets the AES key, and starts receiving data.
+ * This function initializes the hardware components, including the LED,
+ * OLED display, and LoRa module. It also sets up the AES encryption key
+ * and prepares the device for communication.
+ * 
+ * @return void
  */
 void setup() {
+
+  // Initialize the LED
   pinMode(LED_PIN, OUTPUT);
-  pinMode(OLED_POWER_PIN, OUTPUT);
-  digitalWrite(OLED_POWER_PIN, LOW);
-  delay(100);
-  Wire.begin(SDA_OLED_PIN, SCL_OLED_PIN, 500000);
-  delay(100);
 
   // Turn on the LED
   digitalWrite(LED_PIN, HIGH);
 
+  // Initialize the OLED display
+  pinMode(OLED_POWER_PIN, OUTPUT);
+  digitalWrite(OLED_POWER_PIN, LOW);
+  delay(100);
+  
+  // Initialize the I2C bus for the OLED display
+  Wire.begin(SDA_OLED_PIN, SCL_OLED_PIN, 500000);
+  delay(100);
+
+  // Begin the Serial connection on baud rate 115200
   Serial.begin(115200);
+
+  // Wait for the Serial connection to be established
   while (!Serial);
 
   // Check to ensure that the OLED display is connected
@@ -401,7 +501,6 @@ void setup() {
   int textY = SCREEN_HEIGHT - h - 2; // 2 pixels above the bottom edge
   display.setCursor(textX, textY);
   display.print(title);
-
   display.display();
 
   // Set the AES key for encryption/decryption
@@ -416,6 +515,7 @@ void setup() {
     while (true);
   }
 
+  // Set the LoRa parameters.
   lora.setBandwidth(BANDWIDTH);
   lora.setSpreadingFactor(SPREADING_FACTOR);
   lora.setCodingRate(CODING_RATE);
@@ -424,6 +524,7 @@ void setup() {
   lora.setOutputPower(TX_POWER);
   lora.setCRC(true);
 
+  // Report back to tehe serial monitor that the device is ready.
   Serial.print("INIT|LoRa Ready as "); Serial.println(deviceName);
   delay(1000 + random(0, 1500));
   lora.startReceive();
@@ -432,11 +533,25 @@ void setup() {
   digitalWrite(LED_PIN, LOW);
 }
 
+/**
+ * @brief Main loop function
+ * 
+ * This function continuously checks for incoming messages, processes them,
+ * and handles user input from the Serial monitor. It also manages the
+ * sending of encrypted text messages and the retrying of unacknowledged fragments.
+ * 
+ * @return void
+ */
 void loop() {
+
+  // Check for incoming commands from the Serial monitor
   if (Serial.available()) {
+    
+    // Read the input from the Serial monitor
     String input = Serial.readStringUntil('\n');
     input.trim();
 
+    // Handle the input command accordingly.
     if (input.startsWith("AT+MSG=")) {
       String msg = input.substring(7);
       sendEncryptedText(msg);
@@ -446,11 +561,14 @@ void loop() {
     } else {
       Serial.println("ERR|UNKNOWN_CMD");
     }
-  }
+  } 
 
+  // Check for incoming messages from the LoRa module
   uint8_t buf[128];
   int state = lora.receive(buf, sizeof(buf));
   if (state == RADIOLIB_ERR_NONE) {
+
+    // Check if the message is a fragment or an acknowledgment.
     if (buf[0] == TYPE_ACK_FRAGMENT) {
       processAck(buf);
     } else if (buf[0] == TYPE_VERIFY_REPLY) {
@@ -460,10 +578,12 @@ void loop() {
     }
     lora.startReceive();
   } else if (state != RADIOLIB_ERR_RX_TIMEOUT) {
+    // Handle any errors that occur during reception.
     Serial.print("ERR|RX_FAIL|");
     Serial.println(state);
     lora.startReceive();
   }
 
+  // Handle Retrying if an message fragments that need to go out.
   retryFragments();
 }
