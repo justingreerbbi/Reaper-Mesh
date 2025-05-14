@@ -111,7 +111,7 @@ Each response from the device has a simple format it follows. All responses are 
 
 **Receiving LOG Example**
 
-LOG responses can be used to hook into or simply display as a log in your application. The give a keyword of what the LOG is for.
+LOG responses can be used to hook into or simply display as a log in your application. They give a keyword of what the LOG is for.
 
 -   `LOG|DEVICE_CONNECTED`
 -   `LOG|BEACON_SENT`
