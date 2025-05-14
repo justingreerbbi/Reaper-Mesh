@@ -252,9 +252,12 @@ void processFragment(uint8_t* buf) {
     }
 
     if (complete) {
+
+      // Supress duplicate messages and simply remove it from the incoming map.
+      // @TODO: Remove Serial.print statements. It is not really needed. It is just good for debugging.
       if (isRecentMessage(msgId)) {
-        Serial.print("SUPPRESS|DUPLICATE|");
-        Serial.println(msgId);
+        //Serial.print("SUPPRESS|DUPLICATE|");
+        //Serial.println(msgId);
         incoming.erase(msgId);
         return;
       }
