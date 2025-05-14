@@ -59,6 +59,10 @@
 #define SCL_OLED_PIN 18
 #define SDA_OLED_PIN 17
 
+// Becon Config
+#define BEACON_ENABLED true
+#define BEACON_INTERVAL 50000 // ms between beacons
+
 // LoRa module (SX1262) and OLED setup
 SX1262 lora = new Module(8, 14, 12, 13);
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, RST_OLED_PIN);
@@ -336,6 +340,13 @@ void retryFragments() {
   }
 }
 
+// Send a beacon message
+void sendBeacon() {
+  String beaconMsg = "BEACON";
+  sendEncryptedText(beaconMsg);
+  Serial.println("SEND|BEACON");
+}
+
 // One-time initialization
 void setup() {
   pinMode(LED_PIN, OUTPUT);
@@ -418,4 +429,18 @@ void loop() {
   }
 
   retryFragments();
+
+  // Handle beacon sending
+  static unsigned long lastBeacon = 0;
+  static bool initBeaconSent = false;
+  if (!initBeaconSent) {
+    if (BEACON_ENABLED) {
+      sendBeacon();
+      lastBeacon = millis();
+    }
+    initBeaconSent = true;
+  } else if (BEACON_ENABLED && millis() - lastBeacon > BEACON_INTERVAL) {
+    sendBeacon();
+    lastBeacon = millis();
+  }
 }
