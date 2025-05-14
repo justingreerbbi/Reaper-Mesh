@@ -188,7 +188,7 @@ void setup() {
   lora.setOutputPower(TX_POWER);
   lora.setCRC(true);
 
-  Serial.print("INIT|LoRa Ready as "); Serial.println(deviceName);
+  Serial.print("INIT|Ready as "); Serial.println(deviceName);
   lora.startReceive();
 }
 
