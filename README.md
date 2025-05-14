@@ -41,6 +41,8 @@ AT+MSG=FromLaptop
 AT+NAME=ReaperNodeDesktop
 AT+NAME=ReaperNodeLaptop
 
+AT+MSG=Here is a longer message to be sent using lora?
+
 ```cpp
 // Example usage
 #include <YourLibrary.h>
