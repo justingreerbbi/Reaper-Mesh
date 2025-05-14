@@ -8,8 +8,8 @@
 SX1262 lora = new Module(8, 14, 12, 13);  // Heltec V3.2 pins
 
 #define FREQUENCY        915.0
-#define BANDWIDTH        125.0
-#define SPREADING_FACTOR 12
+#define BANDWIDTH        500.0
+#define SPREADING_FACTOR 6
 #define CODING_RATE      8
 #define PREAMBLE_LENGTH  16
 #define SYNC_WORD        0xF3
