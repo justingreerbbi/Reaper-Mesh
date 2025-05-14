@@ -81,9 +81,21 @@ AT+GPS=latitude,longitude
 
 ```bash
 git https://github.com/justingreerbbi/Reaper-Net/
-cd Reaper-Net
-# Upload using PlatformIO or Arduino IDE
 ```
+
+1. I prefer to use VSCode for this along with PlatformIO. If you don't have VSCode, download it and install PlatFormIO in the extensions. Once PlatformIO is installed, simple open a new project and open the directory where you downloaded this code. The system should download all the dependencies (which is not a lot).
+
+2. Plug in your HeltecV3 device and upload and monitor.
+
+3. In the monitor, you can copy and paste any of the example commands and the device will do the rest.
+
+The commands and return in the serial monitor are designed to be software friendly. You can tie in your own GUI and so what you with with the serial data.
+
+All serial responses are structured for sanity. Sections are separated by "|".
+
+1. SEND|FRAG|MSGID=12736|SEQ=1/X|TRY=1 - Lines that start with SEND is a log for you to know that the device is broadcasting a message. This structure allows you to provide a progress bar by parsing the SEQ section. 1/3 means 33%, etc.
+
+2. RECV|ACK_CONFIRM|MSGID - ACK message. The Device received a confirmation that a device has received the message fully.
 
 ### Dependencies
 
