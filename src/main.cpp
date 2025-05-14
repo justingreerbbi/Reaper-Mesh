@@ -140,9 +140,11 @@ void retryFragments() {
 void setup() {
   Serial.begin(115200);
   while (!Serial);
+  
   aes.setKey(aes_key, sizeof(aes_key));
   uint64_t chipId = ESP.getEfuseMac();
-  snprintf(deviceName, sizeof(deviceName), "NODE-%04X", (uint16_t)(chipId & 0xFFFF));
+  snprintf(deviceName, sizeof(deviceName), "R-%04X", (uint16_t)((chipId >> 32) & 0xFFFF));
+
 
   int state = lora.begin(FREQUENCY);
   if (state != RADIOLIB_ERR_NONE) {
