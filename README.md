@@ -36,7 +36,7 @@ AT Commands
 
 AT
 
-AT+MSG=FromDesktop
+AT+MSG=FromDesktopThisMessageIsFrom
 AT+MSG=FromLaptop
 AT+NAME=ReaperNodeDesktop
 AT+NAME=ReaperNodeLaptop
