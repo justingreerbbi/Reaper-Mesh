@@ -22,6 +22,13 @@ Currently, the firmware supports only serial communication. However, as noted ea
 
 Regarding mesh networking: the current implementation is single-hop, but full mesh functionality is a top priority for the next major update. Mesh networking is essential — and it’s coming, I promise.
 
+**Supported Devices**
+Currently there is only one device supported but this can easily be ported to other devices. I would encourage waiting until the project has longer legs. Until then, you can find the device on the official website below. You can pick these up on Amazon as well but make sure it is the real deal and not a clone.
+
+Note: This firmware is its own protocol and will not work to communicate with other LoRa protocals like Meshtatstic or standard LoRa or LoRaWan. You will need two devices with teh same firmware for them to communicate.
+
+[Buy the HeltecV3 Device](https://heltec.org/project/wifi-lora-32-v3/)
+
 ---
 
 ## Table of Contents
