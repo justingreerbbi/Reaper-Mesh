@@ -24,6 +24,17 @@ Regarding mesh networking: the current implementation is single-hop, but full me
 
 ---
 
+## Table of Contents
+
+-   [Installation](#installation)
+-   [Usage](#usage)
+-   [Features](#features)
+-   [Contributing](#contributing)
+-   [License](#license)
+-   [Acknowledgments](#acknowledgments)
+
+---
+
 ## 🚀 Architecture Overview (WIP)
 
 ```
@@ -64,17 +75,6 @@ AT+GPS=latitude,longitude
 -   Currently supports Heltec WiFi LoRa 32 V3 (SX1262)
 -   No external libraries required for parsing
 -   Designed for off-grid, tactical, or remote operations
-
----
-
-## Table of Contents
-
--   [Installation](#installation)
--   [Usage](#usage)
--   [Features](#features)
--   [Contributing](#contributing)
--   [License](#license)
--   [Acknowledgments](#acknowledgments)
 
 ---
 
