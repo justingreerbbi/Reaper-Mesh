@@ -143,7 +143,7 @@ bool isRecentMessage(const String &msgId) {
 void encryptFragment(uint8_t *b) { aes.encryptBlock(b, b); }
 void decryptFragment(uint8_t *b) { aes.decryptBlock(b, b); }
 
-// Original sendEncryptedText
+/*== SEND ENCRYPTED TEXT */
 void sendEncryptedText(String msg) {
   // If TX is busy, return error
   if (isTransmitting) {
@@ -202,7 +202,7 @@ void sendEncryptedText(String msg) {
   isTransmitting = false;  // Reset TX state
 }
 
-// Original processFragment
+/*== PROCESS A FRAGMENT */
 void processFragment(uint8_t *buf) {
   decryptFragment(buf);
   uint8_t type = buf[0] & 0x0F;
@@ -342,7 +342,7 @@ void sendBeacon() {
   Serial.println("LOG|BEACON_SENT");
 }
 
-// Settings functions unchanged
+/*== LOAD SETTINGS */
 void loadSettings() {
   EEPROM.begin(EEPROM_SIZE);
   if (EEPROM.read(ADDR_MAGIC) != EEPROM_MAGIC) {
@@ -362,11 +362,13 @@ void loadSettings() {
   }
 }
 
+/*== SAVE SETTINGS */
 void saveSettings() {
   EEPROM.put(ADDR_SETTINGS, settings);
   EEPROM.commit();
 }
 
+/*== APPLY SETTINGS */
 void applySettings() {
   lora.begin(settings.frequency);
   lora.setBandwidth(BANDWIDTH);
@@ -378,6 +380,7 @@ void applySettings() {
   lora.setCRC(true);
 }
 
+/*== SET SETTINGS */
 void setSetting(const String &k, const String &v) {
   if (k == "name")
     v.toCharArray(settings.deviceName, sizeof(settings.deviceName));
@@ -400,6 +403,7 @@ void setSetting(const String &k, const String &v) {
     Serial.println("ERR|UNKNOWN_SETTING");
 }
 
+/*== PROCESS AT COMMANDS FOR SETTINGS */
 void processATSetting(const String &cmd) {
   int eq = cmd.indexOf('=');
   String kv = cmd.substring(eq + 1);
@@ -411,6 +415,7 @@ void processATSetting(const String &cmd) {
   ESP.restart();
 }
 
+/*== PROCESS BULK AT COMMANDS FOR SETTINGS */
 void processATBulk(const String &cmd) {
   String list = cmd.substring(cmd.indexOf('=') + 1);
   int pos = 0;
@@ -427,6 +432,7 @@ void processATBulk(const String &cmd) {
   ESP.restart();
 }
 
+/*== WIPE DEVICE MEMORY/FACTORY RESET & RESTART */
 void wipeDeviceAndRestart() {
   EEPROM.begin(EEPROM_SIZE);
   for (int i = 0; i < EEPROM_SIZE; ++i) {
@@ -438,6 +444,7 @@ void wipeDeviceAndRestart() {
   ESP.restart();
 }
 
+/*== MAIN SETUP */
 void setup() {
   pinMode(LED_PIN, OUTPUT);
   pinMode(OLED_POWER_PIN, OUTPUT);
@@ -484,6 +491,7 @@ void setup() {
   digitalWrite(LED_PIN, LOW);
 }
 
+/*== MAIN LOOP */
 void loop() {
   if (Serial.available()) {
     String in = Serial.readStringUntil('\n');
