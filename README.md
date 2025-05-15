@@ -75,6 +75,7 @@ AT+GPS=latitude,longitude
 
 -   `AT+MSG=` – Sends a secure text message.
 -   `AT+GPS=` – Sends encrypted GPS coordinates.
+-   `AT+RESET_DEVICE` - Reset the device settings and memory.
 
 ---
 
@@ -179,11 +180,17 @@ AT+GPS=38.8977,-77.0365
 ```text
 SET|<key>|<value>
 ----
-AT+SET=name,55T5
+AT+SET=name,DT45
 AT+SET=freq,915.0
 AT+SET=power,22
 AT+SET=maxret,2
 AT+SET=retryint,1000
+```
+
+Set bulk settings
+
+```text
+AT+SETA=name,NODE2;freq,915.0;power,22;maxret,2;retryint,1000
 ```
 
 ---

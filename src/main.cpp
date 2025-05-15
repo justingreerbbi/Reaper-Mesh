@@ -407,7 +407,7 @@ void processATSetting(const String &cmd) {
   setSetting(kv.substring(0, c), kv.substring(c + 1));
   saveSettings();
   Serial.println("RESTARTING");
-  delay(100);
+  delay(2000);
   ESP.restart();
 }
 
@@ -427,6 +427,17 @@ void processATBulk(const String &cmd) {
   ESP.restart();
 }
 
+void wipeDeviceAndRestart() {
+  EEPROM.begin(EEPROM_SIZE);
+  for (int i = 0; i < EEPROM_SIZE; ++i) {
+    EEPROM.write(i, 0xFF);
+  }
+  EEPROM.commit();
+  Serial.println("LOG|EEPROM_WIPED_RESTARTING");
+  delay(500);
+  ESP.restart();
+}
+
 void setup() {
   pinMode(LED_PIN, OUTPUT);
   pinMode(OLED_POWER_PIN, OUTPUT);
@@ -435,6 +446,7 @@ void setup() {
   Wire.begin(SDA_OLED_PIN, SCL_OLED_PIN, 500000);
   Serial.begin(115200);
   while (!Serial);
+  Serial.println("LOG|STARTING");
 
   loadSettings();
   applySettings();
@@ -484,6 +496,30 @@ void loop() {
       sendEncryptedText(in.substring(7));
     else if (in.startsWith("AT+GPS="))
       sendEncryptedText("GPS:" + in.substring(7));
+    else if (in.startsWith("AT+RESET_DEVICE"))
+      wipeDeviceAndRestart();
+    else if (in.startsWith("AT+SEND_BEACON")) {
+      if (settings.beaconEnabled)
+        sendBeacon();
+      else
+        Serial.println("ERR|BEACON_DISABLED");
+    } else if (in.startsWith("AT+GET_SETTINGS")) {
+      Serial.print("SETTINGS|");
+      Serial.print(settings.deviceName);
+      Serial.print("|");
+      Serial.print(settings.frequency);
+      Serial.print("|");
+      Serial.print(settings.txPower);
+      Serial.print("|");
+      Serial.print(settings.maxRetries);
+      Serial.print("|");
+      Serial.print(settings.retryInterval);
+      Serial.print("|");
+      Serial.print(settings.beaconInterval);
+      Serial.print("|");
+      Serial.println(settings.beaconEnabled ? "true" : "false");
+    } else if (in.startsWith("AT+DEVICE"))
+      Serial.println("HELTEC|READY|REAPER_A3");
     else
       Serial.println("ERR|UNKNOWN_CMD");
   }
@@ -505,11 +541,11 @@ void loop() {
   unsigned long now = millis();
 
   if (!beaconSent) {
-    sendBeacon();
+    // sendBeacon();
     lastBeacon = now;
     beaconSent = true;
   } else if (now - lastBeacon >= settings.beaconInterval) {
-    sendBeacon();
+    // sendBeacon();
     lastBeacon = now;
   }
 }
