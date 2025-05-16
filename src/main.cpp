@@ -88,6 +88,54 @@ struct Settings {
   bool beaconEnabled;
 };
 
+// GPS struct
+struct SatelliteInfo {
+    const char* name;
+    const char* svn;
+    const char* launchDate;
+    const char* blockType;
+    const char* frequency;
+};
+
+// List of most common GPS satellites
+// @todo: This may be better to put on the frontend side to cut down on code size. Look into this.
+std::map<uint8_t, SatelliteInfo> gpsSatellites = {
+  {1,  {"USA-232", "SVN 63", "2012-10-04", "GPS IIF", "L1/L2/L5"}},
+  {2,  {"USA-233", "SVN 61", "2012-10-04", "GPS IIF", "L1/L2/L5"}},
+  {3,  {"USA-239", "SVN 68", "2014-04-01", "GPS IIF", "L1/L2/L5"}},
+  {4,  {"USA-234", "SVN 62", "2013-05-15", "GPS IIF", "L1/L2/L5"}},
+  {5,  {"USA-240", "SVN 69", "2014-05-16", "GPS IIF", "L1/L2/L5"}},
+  {6,  {"USA-236", "SVN 66", "2013-08-01", "GPS IIF", "L1/L2/L5"}},
+  {7,  {"USA-235", "SVN 65", "2013-07-15", "GPS IIF", "L1/L2/L5"}},
+  {8,  {"USA-248", "SVN 73", "2016-02-05", "GPS IIF", "L1/L2/L5"}},
+  {9,  {"USA-241", "SVN 70", "2014-08-01", "GPS IIF", "L1/L2/L5"}},
+  {10, {"USA-244", "SVN 71", "2015-03-25", "GPS IIF", "L1/L2/L5"}},
+  {11, {"USA-243", "SVN 72", "2015-10-31", "GPS IIF", "L1/L2/L5"}},
+  {12, {"USA-242", "SVN 67", "2014-10-29", "GPS IIF", "L1/L2/L5"}},
+  {13, {"USA-230", "SVN 58", "2011-05-28", "GPS IIF", "L1/L2/L5"}},
+  {14, {"USA-206", "SVN 46", "2006-09-25", "GPS IIR-M", "L1/L2"}},
+  {15, {"USA-204", "SVN 51", "2006-11-17", "GPS IIR-M", "L1/L2"}},
+  {16, {"USA-183", "SVN 61", "2003-06-23", "GPS IIR", "L1/L2"}},
+  {17, {"USA-177", "SVN 47", "2003-12-21", "GPS IIR", "L1/L2"}},
+  {18, {"USA-178", "SVN 48", "2004-03-20", "GPS IIR", "L1/L2"}},
+  {19, {"USA-179", "SVN 49", "2004-06-23", "GPS IIR", "L1/L2"}},
+  {20, {"USA-180", "SVN 50", "2004-09-25", "GPS IIR", "L1/L2"}},
+  {21, {"USA-181", "SVN 51", "2005-01-20", "GPS IIR", "L1/L2"}},
+  {22, {"USA-182", "SVN 52", "2005-05-13", "GPS IIR", "L1/L2"}},
+  {23, {"USA-185", "SVN 53", "2006-03-15", "GPS IIR", "L1/L2"}},
+  {24, {"USA-186", "SVN 54", "2006-06-12", "GPS IIR", "L1/L2"}},
+  {25, {"USA-209", "SVN 48", "2006-03-24", "GPS IIR-M", "L1/L2"}},
+  {26, {"USA-210", "SVN 55", "2007-12-20", "GPS IIR-M", "L1/L2"}},
+  {27, {"USA-211", "SVN 56", "2008-03-15", "GPS IIR-M", "L1/L2"}},
+  {28, {"USA-212", "SVN 57", "2008-06-18", "GPS IIR-M", "L1/L2"}},
+  {29, {"USA-213", "SVN 58", "2008-10-20", "GPS IIR-M", "L1/L2"}},
+  {30, {"USA-214", "SVN 59", "2009-03-24", "GPS IIR-M", "L1/L2"}},
+  {31, {"USA-215", "SVN 60", "2009-08-17", "GPS IIR-M", "L1/L2"}},
+  {32, {"USA-216", "SVN 61", "2010-01-25", "GPS IIR-M", "L1/L2"}},
+};
+
+
+
 // Globals
 Settings settings;
 char deviceName[16];
@@ -627,4 +675,13 @@ void loop() {
     sendBeacon();
     lastBeacon = now;
   }
+
+  // If the GPS module is avalaible, get it ready for the beacon.
+  while (GPSSerial.available()) {
+    //gps.encode(GPSSerial.read());
+
+    // Print out the raw data from the GPS serial
+    Serial.write(GPSSerial.read());
+  }
+    
 }
