@@ -16,7 +16,8 @@
 #include <Wire.h>
 #include <math.h>
 #include <string.h>
-
+#include <TinyGPSPlus.h>
+#include <HardwareSerial.h>
 #include <map>
 #include <vector>
 
@@ -64,11 +65,17 @@
 
 // Beacon config
 #define BEACON_ENABLED false
-#define BEACON_INTERVAL 0
+#define BEACON_INTERVAL 30000UL // 30 seconds (Under 1 minute should only be for testing)
+
+// Define UART pins for GPS communication
+#define GPS_RX_PIN 47
+#define GPS_TX_PIN 48 // Not used but defined for completeness
+#define GPS_BAUD_RATE 9600 // Prefered baudrate for the GPS module.
 
 // Global Status
 bool isTransmitting = false;
 bool isReceiving = false;
+bool startupBeaconSent = false;
 
 // Settings struct saved to EEPROM
 struct Settings {
@@ -95,6 +102,10 @@ void processATBulk(const String &cmd);
 // LoRa & display objects
 SX1262 lora = new Module(8, 14, 12, 13);
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, RST_OLED_PIN);
+
+// GPS object
+TinyGPSPlus gps;
+HardwareSerial GPSSerial(2);
 
 // AES
 AES128 aes;
@@ -336,10 +347,33 @@ void retryFragments() {
   }
 }
 
-// Original sendBeacon
+/**
+ * Sends a beacon message to other nodes.
+ */
 void sendBeacon() {
-  sendEncryptedText("BEACON");
+  if (gps.location.isUpdated()) {
+    String gpsData = String(gps.location.lat(), 6) + "," +
+                     String(gps.location.lng(), 6) + "," +
+                     String(gps.altitude.meters()) + "," +
+                     String(gps.speed.kmph()) + "," +
+                     String(gps.course.deg()) + "," +
+                     String(gps.satellites.value());
+    sendEncryptedText("BEACON:" + gpsData);
+  }else {
+    sendEncryptedText("BEACON:0,0,0,0,0,0");
+  }
   Serial.println("LOG|BEACON_SENT");
+}
+
+/**
+ * Sends a REGQUEST to other nodes.
+ * 
+ * @param type The type of request to send.
+ *             Possible values: "BEACON"... more to come
+ */
+void sendREQ(String type){
+  sendEncryptedText("REQ:" + type);
+  Serial.println("LOG|REQ_SENT:" + type);
 }
 
 /*== LOAD SETTINGS */
@@ -352,7 +386,7 @@ void loadSettings() {
     settings.txPower = 22;
     settings.maxRetries = 1;
     settings.retryInterval = 1000;
-    settings.beaconInterval = 10000;
+    settings.beaconInterval = 30000;
     settings.beaconEnabled = true;
     EEPROM.write(ADDR_MAGIC, EEPROM_MAGIC);
     EEPROM.put(ADDR_SETTINGS, settings);
@@ -446,22 +480,40 @@ void wipeDeviceAndRestart() {
 
 /*== MAIN SETUP */
 void setup() {
+
+  // Setup the LED pin
   pinMode(LED_PIN, OUTPUT);
+
+  // Set and power on on the OLED display
   pinMode(OLED_POWER_PIN, OUTPUT);
   digitalWrite(OLED_POWER_PIN, LOW);
   delay(50);
+  
+  // Initialize the OLED display
   Wire.begin(SDA_OLED_PIN, SCL_OLED_PIN, 500000);
+
+  // Start the serial communication on the default Serial port
   Serial.begin(115200);
+
+  // Wait for the serial port to be ready
   while (!Serial);
+
+  // Simple log message saying that the device is starting
   Serial.println("LOG|STARTING");
 
+  // Load the settings from EEPROM
   loadSettings();
+
+  // Apply the settings to the LoRa module
   applySettings();
 
+  // Start the OLED display or fail if it cannot be initialized.
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
     Serial.println("LOG|OLED_FAILED");
-    for (;;);
+    while (1);
   }
+
+  // Show the device name, frequency, and power on the OLED display
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
@@ -470,16 +522,26 @@ void setup() {
                  settings.frequency, settings.txPower);
   display.display();
 
+  // Set the AES Key
   aes.setKey(aes_key, sizeof(aes_key));
+
+  // Set the device name.
   uint16_t cid = (uint16_t)((ESP.getEfuseMac() >> 32) & 0xFFFF);
   snprintf(deviceName, sizeof(deviceName), "%04X", cid);
-
+  
+  // Start the LoRa module or fail if it cannot be initialized.
   int st = lora.begin(settings.frequency);
+  delay(50);
   if (st != RADIOLIB_ERR_NONE) {
-    Serial.printf("ERR|INIT_FAIL|%d\n", st);
+    Serial.printf("ERR|LORA_INIT_FAILED|%d\n", st);
     while (1);
   }
+
+  // Simple log back to the serial port saying that LoRa is connected
   Serial.println("LOG|DEVICE_CONNECTED");
+
+  // Set the LoRa module parameters
+  // @todo: This may be causing issue with the apply settings logic.
   lora.setBandwidth(BANDWIDTH);
   lora.setSpreadingFactor(SPREADING_FACTOR);
   lora.setCodingRate(CODING_RATE);
@@ -488,11 +550,19 @@ void setup() {
   lora.setOutputPower(settings.txPower);
   lora.setCRC(true);
   lora.startReceive();
+
+  // Begin the GPS serial communication
+  GPSSerial.begin(GPS_BAUD_RATE, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
+
+  // Turn off the LED.
   digitalWrite(LED_PIN, LOW);
 }
 
 /*== MAIN LOOP */
 void loop() {
+
+  // If there is any input from the serial port, process it.
+  // This is where the AT commands are processed.
   if (Serial.available()) {
     String in = Serial.readStringUntil('\n');
     in.trim();
@@ -532,6 +602,8 @@ void loop() {
       Serial.println("ERR|UNKNOWN_CMD");
   }
 
+  // Handle any incoming messages and process them.
+  // This is where the incoming messages are processed.
   uint8_t buf[128];
   int state = lora.receive(buf, sizeof(buf));
   if (state == RADIOLIB_ERR_NONE) {
@@ -545,15 +617,14 @@ void loop() {
   retryFragments();
 
   static unsigned long lastBeacon = 0;
-  static bool beaconSent = false;
   unsigned long now = millis();
 
-  if (!beaconSent) {
-    // sendBeacon();
+  if (!startupBeaconSent) {
+    sendBeacon();
     lastBeacon = now;
-    beaconSent = true;
-  } else if (now - lastBeacon >= settings.beaconInterval) {
-    // sendBeacon();
+    startupBeaconSent = true;
+  } else if (now - lastBeacon >= settings.beaconInterval && !isTransmitting) {
+    sendBeacon();
     lastBeacon = now;
   }
 }

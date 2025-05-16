@@ -143,6 +143,24 @@ Serial Output
 
 NOTE: the RECV|ACK_CONFIRM response as the MSG_ID to let you know which message they confirmed they received.
 
+### BASIC MESSAGE STRUCTURE
+
+Given the need to keep the code as clean as possible, I am changing up how different message types are going to be sent. This way we can use one method to send encrypted messages while still being to tell other devices, what we are sending.
+
+Trasnmissions can be the following:
+
+1. MSG:
+2. BEACON:
+4. REQ:
+
+When sending a text meesage simply append the appropriate type in the begining of the message field. This will tell the other devices what type of message this is.
+
+- MSG:This is a normal text message and should be treated as such.
+- BEACON:lat,lng,alt,speed,direction,sat_num
+- REQ:BEACON
+
+Note: BEACON will contain a set number of "," with each dedicated to a specific data point. Right now it is all GPS data but we should add more info like battery_lvl,device_type
+
 ## Installation
 
 ```bash
