@@ -219,8 +219,12 @@ AT+SETA=name,NODE2;freq,915.0;power,22;maxret,2;retryint,1000
 - Add AT command to get a list of all satilite information (GPS attached, num of sats, list of PRN's)
 - Add AT command to get GPS location.
 - Move the satilite struct and sat map logic to the user interface.
-
 - The HeltecV3 has 2 cores. Build test firmeware with FreeRTOS so we can start deligating tasks and start multitasking.
+
+**FreeRTOS**
+The HeltecV3 has 2 cores that we can utilize. Until now, we have been running everything on the main core. We need to form a better plan for core usage and dedicate logic to other cores.
+
+Core 1: Main responisibility to LoRa comunication. Any other logic on this core should be 
 
 ---
 
