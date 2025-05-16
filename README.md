@@ -222,9 +222,16 @@ AT+SETA=name,NODE2;freq,915.0;power,22;maxret,2;retryint,1000
 - The HeltecV3 has 2 cores. Build test firmeware with FreeRTOS so we can start deligating tasks and start multitasking.
 
 **FreeRTOS**
-The HeltecV3 has 2 cores that we can utilize. Until now, we have been running everything on the main core. We need to form a better plan for core usage and dedicate logic to other cores.
+The HeltecV3 has 2 cores that we can utilize. Until now, we have been running everything on the main core. We need to form a better plan for core usage and dedicate logic to other cores. Right now, there is a alot of blocking functionality and guess work w/finger crossing. Too much is relying on the retries.
 
-Core 1: Main responisibility to LoRa comunication. Any other logic on this core should be 
+Core 1: 
+
+- LoRa Communication (TX/RX)
+
+Core 2:
+
+- AT Commands and Responses.
+- GPS Handling. 
 
 ---
 
