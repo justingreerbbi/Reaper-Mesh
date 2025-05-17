@@ -1,4 +1,3 @@
-// [Header Includes and Setup – same as before]
 #include <AES.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
@@ -29,7 +28,6 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, RST_OLED_PIN);
 SX1262 lora = new Module(8, 14, 12, 13);
 TinyGPSPlus gps;
 HardwareSerial GPSSerial(2);
-int numberOfSatellitesFound = -1;
 
 AES128 aes;
 uint8_t aes_key[16] = {0x60, 0x3D, 0xEB, 0x10, 0x15, 0xCA, 0x71, 0xBE,
@@ -46,19 +44,20 @@ uint8_t aes_key[16] = {0x60, 0x3D, 0xEB, 0x10, 0x15, 0xCA, 0x71, 0xBE,
 bool isTransmitting = false;
 bool startupBeaconSent = false;
 
-struct Fragment {
-  uint8_t data[AES_BLOCK_LEN];
-  int retries;
-  unsigned long timestamp;
-  bool acked = false;
-};
+// GPS Tolerance & Debounce
+#define GPS_TOLERANCE_LATLON 0.0001
+#define GPS_TOLERANCE_ALT 2.0
+#define GPS_TOLERANCE_SPEED 1.0
+#define GPS_TOLERANCE_COURSE 5.0
+#define GPS_DEBOUNCE_MS 3000
 
-struct IncomingText {
-  int total;
-  unsigned long start;
-  std::map<uint8_t, String> parts;
-  std::vector<bool> received;
-};
+double lastLat = 0;
+double lastLon = 0;
+double lastAlt = 0;
+double lastSpd = 0;
+double lastCourse = 0;
+int lastSats = 0;
+unsigned long lastGPSSend = 0;
 
 struct Settings {
   char deviceName[16];
@@ -73,9 +72,25 @@ struct Settings {
 Settings settings;
 char deviceName[16];
 
+struct Fragment {
+  uint8_t data[AES_BLOCK_LEN];
+  int retries;
+  unsigned long timestamp;
+  bool acked = false;
+};
+
+struct IncomingText {
+  int total;
+  unsigned long start;
+  std::map<uint8_t, String> parts;
+  std::vector<bool> received;
+};
+
 std::map<String, std::vector<Fragment>> outgoing;
 std::map<String, IncomingText> incoming;
 std::map<String, unsigned long> recentMsgs;
+
+// === Utility ===
 
 String generateMsgID() {
   char buf[7];
@@ -146,7 +161,8 @@ void retryFragments() {
   }
 }
 
-// === FreeRTOS LoRa RX + ACK task ===
+// === LoRa RX Task (Core 1) ===
+
 void taskLoRaHandler(void *param) {
   while (true) {
     uint8_t buf[128];
@@ -173,7 +189,6 @@ void taskLoRaHandler(void *param) {
         }
         msg.parts[seq] = part;
         msg.received[seq] = true;
-
         Serial.printf("RECV|FRAG|%s|%d/%d\n", msgId.c_str(), seq + 1, total);
 
         bool complete = true;
@@ -205,42 +220,34 @@ void taskLoRaHandler(void *param) {
           int sep = fullMessage.indexOf('|');
           String sender = fullMessage.substring(0, sep);
           String message = fullMessage.substring(sep + 1);
-
           Serial.printf("RECV|%s|%s|%s\n", sender.c_str(), message.c_str(),
                         msgId.c_str());
         }
       } else if (type == TYPE_ACK_CONFIRM) {
-        digitalWrite(LED_PIN, HIGH);
-        delay(200);
-        digitalWrite(LED_PIN, LOW);
-
-        Serial.print("RECV|ACK_CONFIRM|");
         char bufId[5];
         snprintf(bufId, sizeof(bufId), "%02X%02X", buf[1], buf[2]);
         String mid(bufId);
         mid.toUpperCase();
-        Serial.println(mid);
-
-        auto it = outgoing.find(mid);
-        if (it != outgoing.end()) {
-          for (auto &frag : it->second) frag.acked = true;
-        }
+        for (auto &frag : outgoing[mid]) frag.acked = true;
       } else if (type == TYPE_ACK_FRAGMENT) {
         processAck(buf);
       }
     }
+
     retryFragments();
     lora.startReceive();
     vTaskDelay(10 / portTICK_PERIOD_MS);
   }
 }
 
-// === App logic task (Core 0) ===
+// === Application Logic Task (Core 0) ===
+
 void taskAppHandler(void *param) {
   unsigned long lastBeacon = 0;
   unsigned long lastGPSPoll = 0;
 
   while (true) {
+    // AT+MSG command
     if (Serial.available()) {
       String in = Serial.readStringUntil('\n');
       in.trim();
@@ -248,6 +255,7 @@ void taskAppHandler(void *param) {
         String msg = in.substring(7);
         if (isTransmitting) continue;
         isTransmitting = true;
+
         msg = String(settings.deviceName) + "|" + msg;
         String msgId = generateMsgID();
         std::vector<Fragment> frags;
@@ -260,10 +268,12 @@ void taskAppHandler(void *param) {
           block[2] = (uint8_t)(strtoul(msgId.c_str(), NULL, 16) & 0xFF);
           block[3] = i;
           block[4] = total;
+
           String chunk =
               msg.substring(i * FRAG_DATA_LEN,
                             min((i + 1) * FRAG_DATA_LEN, (int)msg.length()));
           memcpy(&block[5], chunk.c_str(), chunk.length());
+
           encryptFragment(block);
           Fragment frag;
           memcpy(frag.data, block, AES_BLOCK_LEN);
@@ -281,6 +291,7 @@ void taskAppHandler(void *param) {
 
     unsigned long now = millis();
 
+    // Beacon logic
     if (!startupBeaconSent) {
       Serial.println("LOG|BEACON_SENT");
       startupBeaconSent = true;
@@ -290,20 +301,45 @@ void taskAppHandler(void *param) {
       lastBeacon = now;
     }
 
-    if (gps.location.isValid() && now - lastGPSPoll >= 5000) {
-      Serial.printf("GPS|%.6f,%.6f,%d,%d,%d,%d\n", gps.location.lat(),
-                    gps.location.lng(), (int)gps.altitude.meters(),
-                    (int)gps.speed.kmph(), (int)gps.course.deg(),
-                    gps.satellites.value());
+    // GPS threshold + debounce logic
+    if (gps.location.isValid() && now - lastGPSPoll >= 1000) {
+      double lat = gps.location.lat();
+      double lon = gps.location.lng();
+      double alt = gps.altitude.meters();
+      double spd = gps.speed.kmph();
+      double crs = gps.course.deg();
+      int sats = gps.satellites.value();
+
+      bool changed = fabs(lat - lastLat) > GPS_TOLERANCE_LATLON ||
+                     fabs(lon - lastLon) > GPS_TOLERANCE_LATLON ||
+                     fabs(alt - lastAlt) > GPS_TOLERANCE_ALT ||
+                     fabs(spd - lastSpd) > GPS_TOLERANCE_SPEED ||
+                     fabs(crs - lastCourse) > GPS_TOLERANCE_COURSE ||
+                     sats != lastSats;
+
+      if (changed && (now - lastGPSSend >= GPS_DEBOUNCE_MS)) {
+        Serial.printf("GPS|%.6f,%.6f,%.1f,%.1f,%.1f,%d\n", lat, lon, alt, spd,
+                      crs, sats);
+
+        lastLat = lat;
+        lastLon = lon;
+        lastAlt = alt;
+        lastSpd = spd;
+        lastCourse = crs;
+        lastSats = sats;
+        lastGPSSend = now;
+      }
+
       lastGPSPoll = now;
     }
 
+    // GPS raw data update
     while (GPSSerial.available()) {
       gps.encode(GPSSerial.read());
       int sats = gps.satellites.value();
-      if (sats != numberOfSatellitesFound) {
-        numberOfSatellitesFound = sats;
-        Serial.printf("LOG|SATELLITES_FOUND|%d\n", numberOfSatellitesFound);
+      if (sats != lastSats) {
+        lastSats = sats;
+        Serial.printf("LOG|SATELLITES_FOUND|%d\n", lastSats);
       }
     }
 
@@ -311,19 +347,24 @@ void taskAppHandler(void *param) {
   }
 }
 
+// === Setup ===
+
 void setup() {
   pinMode(LED_PIN, OUTPUT);
   pinMode(OLED_POWER_PIN, OUTPUT);
   digitalWrite(OLED_POWER_PIN, LOW);
   delay(50);
+
   Wire.begin(SDA_OLED_PIN, SCL_OLED_PIN, 500000);
   Serial.begin(115200);
   while (!Serial);
+
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 0);
+
   snprintf(deviceName, sizeof(deviceName), "%04X",
            (uint16_t)((ESP.getEfuseMac() >> 32) & 0xFFFF));
   strcpy(settings.deviceName, deviceName);
@@ -333,15 +374,18 @@ void setup() {
   settings.retryInterval = 1000;
   settings.beaconInterval = 30000;
   settings.beaconEnabled = true;
+
   display.printf("Name:%s\nFreq:%.1f\nPwr:%d\n", settings.deviceName,
                  settings.frequency, settings.txPower);
   display.display();
+
   aes.setKey(aes_key, sizeof(aes_key));
   int st = lora.begin(settings.frequency);
   if (st != RADIOLIB_ERR_NONE) {
     Serial.printf("ERR|LORA_INIT_FAILED|%d\n", st);
     while (1);
   }
+
   lora.setBandwidth(500.0);
   lora.setSpreadingFactor(12);
   lora.setCodingRate(8);
@@ -350,11 +394,13 @@ void setup() {
   lora.setOutputPower(settings.txPower);
   lora.setCRC(true);
   lora.startReceive();
+
   GPSSerial.begin(GPS_BAUD_RATE, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
 
-  // FreeRTOS task setup
   xTaskCreatePinnedToCore(taskLoRaHandler, "LoRaTask", 4096, NULL, 1, NULL, 1);
   xTaskCreatePinnedToCore(taskAppHandler, "AppTask", 8192, NULL, 1, NULL, 0);
 }
 
-void loop() {}
+void loop() {
+  // Nothing here, everything runs on FreeRTOS tasks
+}
