@@ -12,12 +12,13 @@
 #include <Adafruit_SSD1306.h>
 #include <Crypto.h>
 #include <EEPROM.h>
+#include <HardwareSerial.h>
 #include <RadioLib.h>
+#include <TinyGPSPlus.h>
 #include <Wire.h>
 #include <math.h>
 #include <string.h>
-#include <TinyGPSPlus.h>
-#include <HardwareSerial.h>
+
 #include <map>
 #include <vector>
 
@@ -65,17 +66,19 @@
 
 // Beacon config
 #define BEACON_ENABLED false
-#define BEACON_INTERVAL 30000UL // 30 seconds (Under 1 minute should only be for testing)
+#define BEACON_INTERVAL 30000UL
 
 // Define UART pins for GPS communication
 #define GPS_RX_PIN 47
-#define GPS_TX_PIN 48 // Not used but defined for completeness
-#define GPS_BAUD_RATE 9600 // Prefered baudrate for the GPS module.
+#define GPS_TX_PIN 48       // Not used but defined for completeness
+#define GPS_BAUD_RATE 9600  // Prefered baudrate for the GPS module.
 
 // Global Status
 bool isTransmitting = false;
 bool isReceiving = false;
 bool startupBeaconSent = false;
+int numberOfSatellitesFound = -0;  // Start with 0 satellites found
+// bool gpsFix = false;
 
 // Settings struct saved to EEPROM
 struct Settings {
@@ -90,51 +93,50 @@ struct Settings {
 
 // GPS struct
 struct SatelliteInfo {
-    const char* name;
-    const char* svn;
-    const char* launchDate;
-    const char* blockType;
-    const char* frequency;
+  const char *name;
+  const char *svn;
+  const char *launchDate;
+  const char *blockType;
+  const char *frequency;
 };
 
 // List of most common GPS satellites
-// @todo: This may be better to put on the frontend side to cut down on code size. Look into this.
+// @todo: This may be better to put on the frontend side to cut down on code
+// size. Look into this.
 std::map<uint8_t, SatelliteInfo> gpsSatellites = {
-  {1,  {"USA-232", "SVN 63", "2012-10-04", "GPS IIF", "L1/L2/L5"}},
-  {2,  {"USA-233", "SVN 61", "2012-10-04", "GPS IIF", "L1/L2/L5"}},
-  {3,  {"USA-239", "SVN 68", "2014-04-01", "GPS IIF", "L1/L2/L5"}},
-  {4,  {"USA-234", "SVN 62", "2013-05-15", "GPS IIF", "L1/L2/L5"}},
-  {5,  {"USA-240", "SVN 69", "2014-05-16", "GPS IIF", "L1/L2/L5"}},
-  {6,  {"USA-236", "SVN 66", "2013-08-01", "GPS IIF", "L1/L2/L5"}},
-  {7,  {"USA-235", "SVN 65", "2013-07-15", "GPS IIF", "L1/L2/L5"}},
-  {8,  {"USA-248", "SVN 73", "2016-02-05", "GPS IIF", "L1/L2/L5"}},
-  {9,  {"USA-241", "SVN 70", "2014-08-01", "GPS IIF", "L1/L2/L5"}},
-  {10, {"USA-244", "SVN 71", "2015-03-25", "GPS IIF", "L1/L2/L5"}},
-  {11, {"USA-243", "SVN 72", "2015-10-31", "GPS IIF", "L1/L2/L5"}},
-  {12, {"USA-242", "SVN 67", "2014-10-29", "GPS IIF", "L1/L2/L5"}},
-  {13, {"USA-230", "SVN 58", "2011-05-28", "GPS IIF", "L1/L2/L5"}},
-  {14, {"USA-206", "SVN 46", "2006-09-25", "GPS IIR-M", "L1/L2"}},
-  {15, {"USA-204", "SVN 51", "2006-11-17", "GPS IIR-M", "L1/L2"}},
-  {16, {"USA-183", "SVN 61", "2003-06-23", "GPS IIR", "L1/L2"}},
-  {17, {"USA-177", "SVN 47", "2003-12-21", "GPS IIR", "L1/L2"}},
-  {18, {"USA-178", "SVN 48", "2004-03-20", "GPS IIR", "L1/L2"}},
-  {19, {"USA-179", "SVN 49", "2004-06-23", "GPS IIR", "L1/L2"}},
-  {20, {"USA-180", "SVN 50", "2004-09-25", "GPS IIR", "L1/L2"}},
-  {21, {"USA-181", "SVN 51", "2005-01-20", "GPS IIR", "L1/L2"}},
-  {22, {"USA-182", "SVN 52", "2005-05-13", "GPS IIR", "L1/L2"}},
-  {23, {"USA-185", "SVN 53", "2006-03-15", "GPS IIR", "L1/L2"}},
-  {24, {"USA-186", "SVN 54", "2006-06-12", "GPS IIR", "L1/L2"}},
-  {25, {"USA-209", "SVN 48", "2006-03-24", "GPS IIR-M", "L1/L2"}},
-  {26, {"USA-210", "SVN 55", "2007-12-20", "GPS IIR-M", "L1/L2"}},
-  {27, {"USA-211", "SVN 56", "2008-03-15", "GPS IIR-M", "L1/L2"}},
-  {28, {"USA-212", "SVN 57", "2008-06-18", "GPS IIR-M", "L1/L2"}},
-  {29, {"USA-213", "SVN 58", "2008-10-20", "GPS IIR-M", "L1/L2"}},
-  {30, {"USA-214", "SVN 59", "2009-03-24", "GPS IIR-M", "L1/L2"}},
-  {31, {"USA-215", "SVN 60", "2009-08-17", "GPS IIR-M", "L1/L2"}},
-  {32, {"USA-216", "SVN 61", "2010-01-25", "GPS IIR-M", "L1/L2"}},
+    {1, {"USA-232", "SVN 63", "2012-10-04", "GPS IIF", "L1/L2/L5"}},
+    {2, {"USA-233", "SVN 61", "2012-10-04", "GPS IIF", "L1/L2/L5"}},
+    {3, {"USA-239", "SVN 68", "2014-04-01", "GPS IIF", "L1/L2/L5"}},
+    {4, {"USA-234", "SVN 62", "2013-05-15", "GPS IIF", "L1/L2/L5"}},
+    {5, {"USA-240", "SVN 69", "2014-05-16", "GPS IIF", "L1/L2/L5"}},
+    {6, {"USA-236", "SVN 66", "2013-08-01", "GPS IIF", "L1/L2/L5"}},
+    {7, {"USA-235", "SVN 65", "2013-07-15", "GPS IIF", "L1/L2/L5"}},
+    {8, {"USA-248", "SVN 73", "2016-02-05", "GPS IIF", "L1/L2/L5"}},
+    {9, {"USA-241", "SVN 70", "2014-08-01", "GPS IIF", "L1/L2/L5"}},
+    {10, {"USA-244", "SVN 71", "2015-03-25", "GPS IIF", "L1/L2/L5"}},
+    {11, {"USA-243", "SVN 72", "2015-10-31", "GPS IIF", "L1/L2/L5"}},
+    {12, {"USA-242", "SVN 67", "2014-10-29", "GPS IIF", "L1/L2/L5"}},
+    {13, {"USA-230", "SVN 58", "2011-05-28", "GPS IIF", "L1/L2/L5"}},
+    {14, {"USA-206", "SVN 46", "2006-09-25", "GPS IIR-M", "L1/L2"}},
+    {15, {"USA-204", "SVN 51", "2006-11-17", "GPS IIR-M", "L1/L2"}},
+    {16, {"USA-183", "SVN 61", "2003-06-23", "GPS IIR", "L1/L2"}},
+    {17, {"USA-177", "SVN 47", "2003-12-21", "GPS IIR", "L1/L2"}},
+    {18, {"USA-178", "SVN 48", "2004-03-20", "GPS IIR", "L1/L2"}},
+    {19, {"USA-179", "SVN 49", "2004-06-23", "GPS IIR", "L1/L2"}},
+    {20, {"USA-180", "SVN 50", "2004-09-25", "GPS IIR", "L1/L2"}},
+    {21, {"USA-181", "SVN 51", "2005-01-20", "GPS IIR", "L1/L2"}},
+    {22, {"USA-182", "SVN 52", "2005-05-13", "GPS IIR", "L1/L2"}},
+    {23, {"USA-185", "SVN 53", "2006-03-15", "GPS IIR", "L1/L2"}},
+    {24, {"USA-186", "SVN 54", "2006-06-12", "GPS IIR", "L1/L2"}},
+    {25, {"USA-209", "SVN 48", "2006-03-24", "GPS IIR-M", "L1/L2"}},
+    {26, {"USA-210", "SVN 55", "2007-12-20", "GPS IIR-M", "L1/L2"}},
+    {27, {"USA-211", "SVN 56", "2008-03-15", "GPS IIR-M", "L1/L2"}},
+    {28, {"USA-212", "SVN 57", "2008-06-18", "GPS IIR-M", "L1/L2"}},
+    {29, {"USA-213", "SVN 58", "2008-10-20", "GPS IIR-M", "L1/L2"}},
+    {30, {"USA-214", "SVN 59", "2009-03-24", "GPS IIR-M", "L1/L2"}},
+    {31, {"USA-215", "SVN 60", "2009-08-17", "GPS IIR-M", "L1/L2"}},
+    {32, {"USA-216", "SVN 61", "2010-01-25", "GPS IIR-M", "L1/L2"}},
 };
-
-
 
 // Globals
 Settings settings;
@@ -400,14 +402,12 @@ void retryFragments() {
  */
 void sendBeacon() {
   if (gps.location.isUpdated()) {
-    String gpsData = String(gps.location.lat(), 6) + "," +
-                     String(gps.location.lng(), 6) + "," +
-                     String(gps.altitude.meters()) + "," +
-                     String(gps.speed.kmph()) + "," +
-                     String(gps.course.deg()) + "," +
-                     String(gps.satellites.value());
+    String gpsData =
+        String(gps.location.lat(), 6) + "," + String(gps.location.lng(), 6) +
+        "," + String(gps.altitude.meters()) + "," + String(gps.speed.kmph()) +
+        "," + String(gps.course.deg()) + "," + String(gps.satellites.value());
     sendEncryptedText("BEACON:" + gpsData);
-  }else {
+  } else {
     sendEncryptedText("BEACON:0,0,0,0,0,0");
   }
   Serial.println("LOG|BEACON_SENT");
@@ -415,11 +415,11 @@ void sendBeacon() {
 
 /**
  * Sends a REGQUEST to other nodes.
- * 
+ *
  * @param type The type of request to send.
  *             Possible values: "BEACON"... more to come
  */
-void sendREQ(String type){
+void sendREQ(String type) {
   sendEncryptedText("REQ:" + type);
   Serial.println("LOG|REQ_SENT:" + type);
 }
@@ -526,9 +526,33 @@ void wipeDeviceAndRestart() {
   ESP.restart();
 }
 
+/*== GPS DATA */
+void getGPSData() {
+  // while (GPSSerial.available()) {
+  gps.encode(GPSSerial.read());
+
+  numberOfSatellitesFound = gps.satellites.value();
+  if (gps.location.isValid()) {
+    Serial.print("GPS|");
+    Serial.print(gps.location.lat(), 6);
+    Serial.print(",");
+    Serial.print(gps.location.lng(), 6);
+    Serial.print(",");
+    Serial.print(gps.altitude.meters());
+    Serial.print(",");
+    Serial.print(gps.speed.kmph());
+    Serial.print(",");
+    Serial.print(gps.course.deg());
+    Serial.print(",");
+    Serial.println(numberOfSatellitesFound);
+  } else {
+    Serial.println("GPS|0,0,0,0,0,0");
+  }
+  //}
+}
+
 /*== MAIN SETUP */
 void setup() {
-
   // Setup the LED pin
   pinMode(LED_PIN, OUTPUT);
 
@@ -536,7 +560,7 @@ void setup() {
   pinMode(OLED_POWER_PIN, OUTPUT);
   digitalWrite(OLED_POWER_PIN, LOW);
   delay(50);
-  
+
   // Initialize the OLED display
   Wire.begin(SDA_OLED_PIN, SCL_OLED_PIN, 500000);
 
@@ -576,7 +600,7 @@ void setup() {
   // Set the device name.
   uint16_t cid = (uint16_t)((ESP.getEfuseMac() >> 32) & 0xFFFF);
   snprintf(deviceName, sizeof(deviceName), "%04X", cid);
-  
+
   // Start the LoRa module or fail if it cannot be initialized.
   int st = lora.begin(settings.frequency);
   delay(50);
@@ -608,7 +632,6 @@ void setup() {
 
 /*== MAIN LOOP */
 void loop() {
-
   // If there is any input from the serial port, process it.
   // This is where the AT commands are processed.
   if (Serial.available()) {
@@ -646,7 +669,9 @@ void loop() {
       Serial.println(settings.beaconEnabled ? "true" : "false");
     } else if (in.startsWith("AT+DEVICE"))
       Serial.println("HELTEC|READY|REAPER_A3");
-    else
+    else if (in.startsWith("AT+GPS_DATA")) {
+      getGPSData();
+    } else
       Serial.println("ERR|UNKNOWN_CMD");
   }
 
@@ -667,21 +692,31 @@ void loop() {
   static unsigned long lastBeacon = 0;
   unsigned long now = millis();
 
-  if (!startupBeaconSent) {
+  if (!startupBeaconSent && BEACON_ENABLED) {
     sendBeacon();
     lastBeacon = now;
     startupBeaconSent = true;
-  } else if (now - lastBeacon >= settings.beaconInterval && !isTransmitting) {
+  } else if (now - lastBeacon >= settings.beaconInterval && !isTransmitting &&
+             BEACON_ENABLED) {
     sendBeacon();
     lastBeacon = now;
   }
 
-  // If the GPS module is avalaible, get it ready for the beacon.
-  while (GPSSerial.available()) {
-    //gps.encode(GPSSerial.read());
-
-    // Print out the raw data from the GPS serial
-    Serial.write(GPSSerial.read());
+  static unsigned long lastGPSPoll = 0;
+  if (gps.location.isValid()) {
+    if (now - lastGPSPoll >= 5000) {
+      getGPSData();
+      lastGPSPoll = now;
+    }
   }
-    
+
+  // If the GPS module is available, get it ready for the beacon.
+  while (GPSSerial.available()) {
+    gps.encode(GPSSerial.read());
+    int sats = gps.satellites.value();
+    if (sats != numberOfSatellitesFound) {
+      numberOfSatellitesFound = sats;
+      Serial.printf("LOG|SATELLITES_FOUND|%d\n", numberOfSatellitesFound);
+    }
+  }
 }
