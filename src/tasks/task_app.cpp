@@ -21,12 +21,51 @@ void taskAppHandler(void* param) {
         continue; // Break
       }
 
+      // Send a group message. MSG|<device_name>|<message>
       if (in.startsWith("AT+MSG=")) {
         String msg = in.substring(7);
         if (isTransmitting) continue;
         isTransmitting = true;
 
-        msg = String(settings.deviceName) + "|" + msg;
+        msg = "MSG|" + String(settings.deviceName) + "|" + msg;
+        String msgId = generateMsgID();
+        std::vector<Fragment> frags;
+        int total = (msg.length() + FRAG_DATA_LEN - 1) / FRAG_DATA_LEN;
+
+        for (int i = 0; i < total; i++) {
+          uint8_t block[AES_BLOCK_LEN] = {0};
+          block[0] = PRIORITY_NORMAL;
+          block[1] = (uint8_t)(strtoul(msgId.c_str(), NULL, 16) >> 8);
+          block[2] = (uint8_t)(strtoul(msgId.c_str(), NULL, 16) & 0xFF);
+          block[3] = i;
+          block[4] = total;
+
+          String chunk =
+              msg.substring(i * FRAG_DATA_LEN,
+                            min((i + 1) * FRAG_DATA_LEN, (int)msg.length()));
+          memcpy(&block[5], chunk.c_str(), chunk.length());
+
+          encryptFragment(block);
+          Fragment frag;
+          memcpy(frag.data, block, AES_BLOCK_LEN);
+          frag.retries = 0;
+          frag.timestamp = millis();
+          frag.acked = false;
+          frags.push_back(frag);
+          lora.transmit(block, AES_BLOCK_LEN);
+        }
+
+        outgoing[msgId] = frags;
+        isTransmitting = false;
+      }
+
+      // Send a direct message to a node DMSG|<device_name>|<to_device_name>|<message>|<msgID>
+    if (in.startsWith("AT+DMSG=")) {
+        String msg = in.substring(8);
+        if (isTransmitting) continue;
+        isTransmitting = true;
+
+        msg = "DMSG|" + String(settings.deviceName) + "|" + msg;
         String msgId = generateMsgID();
         std::vector<Fragment> frags;
         int total = (msg.length() + FRAG_DATA_LEN - 1) / FRAG_DATA_LEN;
