@@ -191,7 +191,7 @@ void handleIncoming(uint8_t *buf) {
     String mid(bufId);
     mid.toUpperCase();
     for (auto &frag : outgoing[mid]) frag.acked = true;
-    Serial.printf("ACK|CONFIRM|%s", mid.c_str());
+    Serial.printf("ACK|CONFIRM|%s\n", mid.c_str());
   } else if (type == TYPE_ACK_FRAGMENT) {
     processAck(buf);
   }
