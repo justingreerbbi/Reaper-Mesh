@@ -12,7 +12,7 @@ extern Adafruit_SSD1306 display;
 void initDisplay(const char* deviceName, float freq, int txPower) {
   pinMode(OLED_POWER_PIN, OUTPUT);
   digitalWrite(OLED_POWER_PIN, LOW);
-  delay(50);
+  vTaskDelay(10 / portTICK_PERIOD_MS);
   Wire.begin(SDA_OLED_PIN, SCL_OLED_PIN, 500000);
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
   display.clearDisplay();
