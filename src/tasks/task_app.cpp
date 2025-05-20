@@ -15,6 +15,12 @@ void taskAppHandler(void* param) {
       String in = Serial.readStringUntil('\n');
       in.trim();
 
+      // Check if the incoming message is the device prompt AT command. AT+DEVICE.
+      if (in.startsWith("AT+DEVICE?")) {
+        Serial.println("HELTEC|READY|" + String(settings.deviceName));
+        continue; // Break
+      }
+
       if (in.startsWith("AT+MSG=")) {
         String msg = in.substring(7);
         if (isTransmitting) continue;
