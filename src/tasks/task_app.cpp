@@ -99,17 +99,17 @@ void taskAppHandler(void* param) {
     }
 
     unsigned long now = millis();
-    //if (!startupBeaconSent) {
-    //  Serial.println("LOG|BEACON_SENT");
-    //  startupBeaconSent = true;
-    //  lastBeacon = now;
-    //} else if (now - lastBeacon >= settings.beaconInterval && !isTransmitting) {
-    //  Serial.println("LOG|BEACON_SENT");
-    //  lastBeacon = now;
-    //}
+    if (!startupBeaconSent) {
+      Serial.println("LOG|BEACON_SENT");
+      startupBeaconSent = true;
+      lastBeacon = now;
+    } else if (now - lastBeacon >= settings.beaconInterval && !isTransmitting) {
+      Serial.println("LOG|BEACON_SENT");
+      lastBeacon = now;
+    }
 
-    //updateGPS();
-    //printGPSDataIfChanged();
+    updateGPS();
+    printGPSDataIfChanged();
 
     vTaskDelay(10 / portTICK_PERIOD_MS);
   }
