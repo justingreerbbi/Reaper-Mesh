@@ -163,7 +163,7 @@ void handleIncoming(uint8_t *buf) {
 
       String fullMessage;
       for (int i = 0; i < total; i++) fullMessage += msg.parts[i];
-      //Serial.println(fullMessage);
+      // Serial.println(fullMessage);
 
       std::vector<String> parts;
       int last = 0, next = 0;
@@ -178,11 +178,18 @@ void handleIncoming(uint8_t *buf) {
 
       if (msgType == "MSG") {
         String message = parts[2];
-        Serial.printf("RECV|MSG|%s|%s|%s\n", sender.c_str(), message.c_str(), msgId.c_str());
+        Serial.printf("RECV|MSG|%s|%s|%s\n", sender.c_str(), message.c_str(),
+                      msgId.c_str());
       } else if (msgType == "DMSG") {
         String recipient = parts[2];
         String message = parts[3];
-        Serial.printf("RECV|DMSG|%s|%s|%s|%s\n", sender.c_str(), recipient.c_str(), message.c_str(), msgId.c_str());
+        Serial.printf("RECV|DMSG|%s|%s|%s|%s\n", sender.c_str(),
+                      recipient.c_str(), message.c_str(), msgId.c_str());
+      } else if (msgType == "BEACON") {
+        Serial.print("RECV|");
+        Serial.println(fullMessage);
+      } else {
+        Serial.printf("RECV|UNKNOWN|%s\n", fullMessage.c_str());
       }
     }
   } else if (type == TYPE_ACK_CONFIRM) {
@@ -218,9 +225,8 @@ void sendBeacon() {
     block[3] = i;
     block[4] = total;
 
-    String chunk =
-        msg.substring(i * FRAG_DATA_LEN,
-                      min((i + 1) * FRAG_DATA_LEN, (int)msg.length()));
+    String chunk = msg.substring(
+        i * FRAG_DATA_LEN, min((i + 1) * FRAG_DATA_LEN, (int)msg.length()));
     memcpy(&block[5], chunk.c_str(), chunk.length());
 
     encryptFragment(block);
