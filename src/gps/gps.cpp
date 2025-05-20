@@ -61,3 +61,20 @@ void printGPSDataIfChanged() {
                   gps.course.deg(), gps.satellites.value());
   }
 }
+
+ReaperGPSData getGPSData() {
+
+  if (!gps.location.isValid()) {
+    Serial.println("GPS|INVALID");
+    return ReaperGPSData{0, 0, 0, 0, 0, 0};
+  }
+
+  ReaperGPSData data;
+  data.latitude = gps.location.lat();
+  data.longitude = gps.location.lng();
+  data.altitude = gps.altitude.meters();
+  data.speed = gps.speed.kmph();
+  data.course = gps.course.deg();
+  data.satellites = gps.satellites.value();
+  return data;
+}

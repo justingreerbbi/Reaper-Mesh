@@ -4,6 +4,7 @@
 #include <Crypto.h>
 
 #include "../config.h"
+#include "../gps/gps.h"
 
 AES128 aes;
 uint8_t aes_key[16] = {0x60, 0x3D, 0xEB, 0x10, 0x15, 0xCA, 0x71, 0xBE,
@@ -194,4 +195,42 @@ void handleIncoming(uint8_t *buf) {
   } else if (type == TYPE_ACK_FRAGMENT) {
     processAck(buf);
   }
+}
+
+void sendBeacon() {
+  String msg;
+  ReaperGPSData data = getGPSData();
+  msg = data.latitude;
+  msg += "," + String(data.longitude);
+  msg += "," + String(data.altitude);
+  msg += "," + String(data.speed);
+  msg += "," + String(data.course);
+  msg += "," + String(data.satellites);
+  msg = "BEACON|" + String(settings.deviceName) + "|" + msg;
+  String msgId = generateMsgID();
+  std::vector<Fragment> frags;
+  int total = (msg.length() + FRAG_DATA_LEN - 1) / FRAG_DATA_LEN;
+  for (int i = 0; i < total; i++) {
+    uint8_t block[AES_BLOCK_LEN] = {0};
+    block[0] = PRIORITY_NORMAL;
+    block[1] = (uint8_t)(strtoul(msgId.c_str(), NULL, 16) >> 8);
+    block[2] = (uint8_t)(strtoul(msgId.c_str(), NULL, 16) & 0xFF);
+    block[3] = i;
+    block[4] = total;
+
+    String chunk =
+        msg.substring(i * FRAG_DATA_LEN,
+                      min((i + 1) * FRAG_DATA_LEN, (int)msg.length()));
+    memcpy(&block[5], chunk.c_str(), chunk.length());
+
+    encryptFragment(block);
+    Fragment frag;
+    memcpy(frag.data, block, AES_BLOCK_LEN);
+    frag.retries = 0;
+    frag.timestamp = millis();
+    frag.acked = false;
+    frags.push_back(frag);
+    lora.transmit(block, AES_BLOCK_LEN);
+  }
+  outgoing[msgId] = frags;
 }

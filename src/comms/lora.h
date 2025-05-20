@@ -39,3 +39,4 @@ String generateMsgID();
 void encryptFragment(uint8_t *b);
 void decryptFragment(uint8_t *b);
 bool isRecentMessage(const String &msgId);
+void sendBeacon();

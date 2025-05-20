@@ -96,20 +96,46 @@ void taskAppHandler(void* param) {
         outgoing[msgId] = frags;
         isTransmitting = false;
       }
+    
+
+    if (in.startsWith("AT+GPS?")) {
+        if (isTransmitting) continue;
+        ReaperGPSData data = getGPSData();
+        Serial.printf("GPS|%.6f,%.6f,%.1f,%.1f,%.1f,%d\n", data.latitude,
+                      data.longitude, data.altitude, data.speed, data.course,
+                      data.satellites);
+        //Serial.print("|");
+        //Serial.println(data.hdop, 2);
+        isTransmitting = false;
     }
+
+    if (in.startsWith("AT+BEACON")) {
+        if (isTransmitting) continue;
+        isTransmitting = true;
+        sendBeacon();
+        isTransmitting = false;
+    }
+
+  } // END OF INCOMING STATEMENT
 
     unsigned long now = millis();
     if (!startupBeaconSent) {
-      Serial.println("LOG|BEACON_SENT");
+      //sendBeacon();
+      //Serial.println("LOG|BEACON_SENT");
       startupBeaconSent = true;
       lastBeacon = now;
     } else if (now - lastBeacon >= settings.beaconInterval && !isTransmitting) {
-      Serial.println("LOG|BEACON_SENT");
+      //Serial.println("LOG|BEACON_SENT");
+      //sendBeacon();
       lastBeacon = now;
     }
 
     updateGPS();
-    printGPSDataIfChanged();
+    
+    // Report the gps if the device is not transmitting.
+    if(!isTransmitting){
+      printGPSDataIfChanged();
+    }
 
     vTaskDelay(10 / portTICK_PERIOD_MS);
   }
