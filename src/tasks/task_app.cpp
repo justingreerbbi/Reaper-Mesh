@@ -15,10 +15,11 @@ void taskAppHandler(void* param) {
       String in = Serial.readStringUntil('\n');
       in.trim();
 
-      // Check if the incoming message is the device prompt AT command. AT+DEVICE.
+      // Check if the incoming message is the device prompt AT command.
+      // AT+DEVICE.
       if (in.startsWith("AT+DEVICE?")) {
         Serial.println("HELTEC|READY|" + String(settings.deviceName));
-        continue; // Break
+        continue;  // Break
       }
 
       // Send a group message. MSG|<device_name>|<message>
@@ -59,8 +60,9 @@ void taskAppHandler(void* param) {
         isTransmitting = false;
       }
 
-      // Send a direct message to a node DMSG|<device_name>|<to_device_name>|<message>|<msgID>
-    if (in.startsWith("AT+DMSG=")) {
+      // Send a direct message to a node
+      // DMSG|<device_name>|<to_device_name>|<message>|<msgID>
+      if (in.startsWith("AT+DMSG=")) {
         String msg = in.substring(8);
         if (isTransmitting) continue;
         isTransmitting = true;
@@ -96,44 +98,43 @@ void taskAppHandler(void* param) {
         outgoing[msgId] = frags;
         isTransmitting = false;
       }
-    
 
-    if (in.startsWith("AT+GPS?")) {
+      if (in.startsWith("AT+GPS?")) {
         if (isTransmitting) continue;
         ReaperGPSData data = getGPSData();
         Serial.printf("GPS|%.6f,%.6f,%.1f,%.1f,%.1f,%d\n", data.latitude,
                       data.longitude, data.altitude, data.speed, data.course,
                       data.satellites);
-        //Serial.print("|");
-        //Serial.println(data.hdop, 2);
+        // Serial.print("|");
+        // Serial.println(data.hdop, 2);
         isTransmitting = false;
-    }
+      }
 
-    if (in.startsWith("AT+BEACON")) {
+      if (in.startsWith("AT+BEACON")) {
         if (isTransmitting) continue;
         isTransmitting = true;
         sendBeacon();
         isTransmitting = false;
-    }
+      }
 
-  } // END OF INCOMING STATEMENT
+    }  // END OF INCOMING STATEMENT
 
     unsigned long now = millis();
     if (!startupBeaconSent) {
-      //sendBeacon();
-      //Serial.println("LOG|BEACON_SENT");
+      // sendBeacon();
+      // Serial.println("LOG|BEACON_SENT");
       startupBeaconSent = true;
       lastBeacon = now;
     } else if (now - lastBeacon >= settings.beaconInterval && !isTransmitting) {
-      //Serial.println("LOG|BEACON_SENT");
-      //sendBeacon();
+      // Serial.println("LOG|BEACON_SENT");
+      // sendBeacon();
       lastBeacon = now;
     }
 
     updateGPS();
-    
+
     // Report the gps if the device is not transmitting.
-    if(!isTransmitting){
+    if (!isTransmitting) {
       printGPSDataIfChanged();
     }
 
