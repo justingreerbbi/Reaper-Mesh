@@ -78,13 +78,13 @@ void processAck(uint8_t *buf) {
   }
 }
 
-void retryFragments() {
+void sendMessages() {
   for (auto it = outgoing.begin(); it != outgoing.end();) {
     bool allAcked = true;
     for (auto &frag : it->second) {
       if (frag.acked || frag.retries >= 2) continue;
       unsigned long start = millis();
-      while (millis() - start < 1000) {
+      while (millis() - start < 500) {
         uint8_t buf[128];
         int state = lora.receive(buf, sizeof(buf));
         if (state == RADIOLIB_ERR_NONE) {
@@ -98,8 +98,9 @@ void retryFragments() {
         if (state == RADIOLIB_ERR_NONE) {
           frag.timestamp = millis();
           frag.retries++;
-          Serial.printf("SEND|ATTEMPT|%s|%d|try=%d\n", it->first.c_str(),
-                        (&frag - &it->second[0]), frag.retries);
+          Serial.printf("SEND|ATTEMPT|%s|%d/%d|try=%d\n", it->first.c_str(),
+                        (&frag - &it->second[0]) + 1, (int)it->second.size(),
+                        frag.retries);
         }
         lora.startReceive();
         allAcked = false;

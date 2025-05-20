@@ -33,7 +33,7 @@ extern std::map<String, IncomingText> incoming;
 
 void initLoRa(float freq, int txPower);
 void handleIncoming(uint8_t *buf);
-void retryFragments();
+void sendMessages();
 void processAck(uint8_t *buf);
 String generateMsgID();
 void encryptFragment(uint8_t *b);

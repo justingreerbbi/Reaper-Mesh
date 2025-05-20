@@ -10,7 +10,7 @@ void taskLoRaHandler(void* param) {
       handleIncoming(buf);
     }
 
-    retryFragments();
+    sendMessages();
     lora.startReceive();
     vTaskDelay(10 / portTICK_PERIOD_MS);
   }
