@@ -28,6 +28,13 @@
 #define GPS_TOLERANCE_COURSE 5.0
 #define GPS_DEBOUNCE_MS 3000
 
+#define LORA_BANDWIDTH 500.0
+#define LORA_SPREADING_FACTOR 12
+#define LORA_CODING_RATE 8
+#define LORA_PREAMBLE_LENGTH 20
+#define LORA_SYNC_WORD 0xF3
+#define LORA_CRC true
+
 struct Settings {
   char deviceName[16];
   float frequency;

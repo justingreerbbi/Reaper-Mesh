@@ -3,6 +3,8 @@
 #include <AES.h>
 #include <Crypto.h>
 
+#include "../config.h"
+
 AES128 aes;
 uint8_t aes_key[16] = {0x60, 0x3D, 0xEB, 0x10, 0x15, 0xCA, 0x71, 0xBE,
                        0x2B, 0x73, 0xAE, 0xF0, 0x85, 0x7D, 0x77, 0x81};
@@ -12,6 +14,7 @@ std::map<String, std::vector<Fragment>> outgoing;
 std::map<String, IncomingText> incoming;
 std::map<String, unsigned long> recentMsgs;
 
+// Initialize the LoRa module with the given frequency and transmission power.
 void initLoRa(float freq, int txPower) {
   aes.setKey(aes_key, sizeof(aes_key));
   int state = lora.begin(freq);
@@ -19,22 +22,31 @@ void initLoRa(float freq, int txPower) {
     Serial.printf("ERR|LORA_INIT_FAILED|%d\n", state);
     while (1);
   }
-  lora.setBandwidth(500.0);
-  lora.setSpreadingFactor(12);
-  lora.setCodingRate(8);
-  lora.setPreambleLength(20);
-  lora.setSyncWord(0xF3);
+
+  // Set LoRa parameters. For now, we use a set of hard coded parameters to keep
+  // the system simple. These can be changed later to allow for more flexibility
+  // but for now, we will keep it simple and use a set of hard coded parameters.
+  lora.setBandwidth(LORA_BANDWIDTH);
+  lora.setSpreadingFactor(LORA_SPREADING_FACTOR);
+  lora.setCodingRate(LORA_CODING_RATE);
+  lora.setPreambleLength(LORA_PREAMBLE_LENGTH);
+  lora.setSyncWord(LORA_SYNC_WORD);
   lora.setOutputPower(txPower);
-  lora.setCRC(true);
+  lora.setCRC(LORA_CRC);
   lora.startReceive();
 }
 
+// Generate a random message ID
+// The ID is a 4-digit hexadecimal number, generated using esp_random().
 String generateMsgID() {
   char buf[7];
   snprintf(buf, sizeof(buf), "%04X", (uint16_t)esp_random());
   return String(buf);
 }
 
+// Check if the message ID is recent.
+// If it is, return true. Otherwise, add it to the recent messages map and
+// return false.
 bool isRecentMessage(const String &msgId) {
   unsigned long now = millis();
   for (auto it = recentMsgs.begin(); it != recentMsgs.end();) {
@@ -51,6 +63,8 @@ bool isRecentMessage(const String &msgId) {
 void encryptFragment(uint8_t *b) { aes.encryptBlock(b, b); }
 void decryptFragment(uint8_t *b) { aes.decryptBlock(b, b); }
 
+// Process the ACK fragment.
+// This function is called when an ACK fragment is received.
 void processAck(uint8_t *buf) {
   decryptFragment(buf);
   if (buf[0] != TYPE_ACK_FRAGMENT) return;

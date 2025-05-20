@@ -54,7 +54,6 @@ void taskAppHandler(void* param) {
     }
 
     unsigned long now = millis();
-
     if (!startupBeaconSent) {
       Serial.println("LOG|BEACON_SENT");
       startupBeaconSent = true;
