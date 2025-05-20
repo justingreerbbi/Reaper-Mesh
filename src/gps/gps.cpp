@@ -63,13 +63,18 @@ void printGPSDataIfChanged() {
 }
 
 ReaperGPSData getGPSData() {
+  ReaperGPSData data;
 
   if (!gps.location.isValid()) {
-    Serial.println("GPS|INVALID");
-    return ReaperGPSData{0, 0, 0, 0, 0, 0};
+    data.latitude = 0;
+    data.longitude = 0;
+    data.altitude = 0;
+    data.speed = 0;
+    data.course = 0;
+    data.satellites = 0;
+    return data;
   }
 
-  ReaperGPSData data;
   data.latitude = gps.location.lat();
   data.longitude = gps.location.lng();
   data.altitude = gps.altitude.meters();
