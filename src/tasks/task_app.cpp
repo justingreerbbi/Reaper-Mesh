@@ -105,8 +105,6 @@ void taskAppHandler(void* param) {
         Serial.printf("GPS|%.6f,%.6f,%.1f,%.1f,%.1f,%d\n", data.latitude,
                       data.longitude, data.altitude, data.speed, data.course,
                       data.satellites);
-        // Serial.print("|");
-        // Serial.println(data.hdop, 2);
         isTransmitting = false;
       }
 

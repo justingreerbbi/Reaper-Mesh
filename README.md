@@ -66,25 +66,17 @@ Note: This firmware is its own protocol and will not work to communicate with ot
 AT+DEVICE?
 AT+MSG=YOUR MESSAGE HERE
 AT+DMSG=7065|Hello Node 7065. How are you today?
+AT+BEACON
+AT+GPS?
 ```
-
-**EXAMPLES**
-
--   AT+MSG=Aplha Team in place. Processding to next objective.
-
-### Message Types
-
--   `AT+MSG=` – Sends a secure text message.
--   `AT+GPS=` – Sends encrypted GPS coordinates.
--   `AT+RESET_DEVICE` - Reset the device settings and memory.
 
 ---
 
 ## Features
 
--   AES-encrypted messages.
--   Binary Fragmentation is used to be able to transmit data over the noraml limits of LoRa.
--   Simple serial `AT+` command interface with formatted responses for software integration.
+-   Group Messaging & Direct Messaging
+-   Fragmented transmission that allows for longer air time and larger data transmission.
+-   Serial `AT+` command interface.
 -   Integrated retry system until at least one node acknowledges the message.
 
 **Upcoming**
@@ -103,62 +95,23 @@ AT+DMSG=7065|Hello Node 7065. How are you today?
 
 ## How to use
 
-This firmware provides no user interface to the device currently. Everything is done via Serial communications on Baud rate 115200. Connecting to the device can be done via a USB cable or through serial connections from another MCU.
-
-As the project becomes more stable, I will be adding more ways to take advantage of the communication between nodes.
-
-## Understand Serial Responses
-
-Each response from the device has a simple format it follows. All responses are separated by the character "|". The first index will be LOG,RECV,SEND, or ERR.
-
-**Receiving LOG Example**
-
-LOG responses can be used to hook into or simply display as a log in your application. They give a keyword of what the LOG is for.
-
--   `LOG|DEVICE_CONNECTED`
--   `LOG|BEACON_SENT`
-
-**Receiving a Beacon Example**
-
-The example below shows a normal message coming in but after decrypting, the content is a beacon ping from another node. They are saying "Hi, I'm Here!"
-
--   `RECV|FRAG|F305|1/1`
--   `RECV|28C6|BEACON|F305`
-
-**SEND/RECV Example**
-
-Below is an example of sending a message that has 5 fragments followed by a `RECV|ACK_CONFIRM`. The ACK_CONFIRM is a receipt confirmation that a node as received the message.
-
-AT+ command to send a message
-
--   `AT+MSG=Hello World`
-
-Serial Output
-
--   `SEND|FRAG|56FA|1/5|TRY=1`
--   `SEND|FRAG|56FA|2/5|TRY=1`
--   `SEND|FRAG|56FA|3/5|TRY=1`
--   `SEND|FRAG|56FA|4/5|TRY=1`
--   `SEND|FRAG|56FA|5/5|TRY=1`
--   `RECV|ACK_CONFIRM|56FA`
-
-NOTE: the RECV|ACK_CONFIRM response as the MSG_ID to let you know which message they confirmed they received.
+In the works...
 
 ### BASIC MESSAGE STRUCTURE
 
 Given the need to keep the code as clean as possible, I am changing up how different message types are going to be sent. This way we can use one method to send encrypted messages while still being to tell other devices, what we are sending.
 
-Trasnmissions can be the following:
+Transmissions can be the following:
 
 1. MSG:
 2. BEACON:
-4. REQ:
+3. REQ:
 
-When sending a text meesage simply append the appropriate type in the begining of the message field. This will tell the other devices what type of message this is.
+When sending a text message simply append the appropriate type in the beginning of the message field. This will tell the other devices what type of message this is.
 
-- MSG:This is a normal text message and should be treated as such.
-- BEACON:lat,lng,alt,speed,direction,sat_num
-- REQ:BEACON
+-   MSG:This is a normal text message and should be treated as such.
+-   BEACON:lat,lng,alt,speed,direction,sat_num
+-   REQ:BEACON
 
 Note: BEACON will contain a set number of "," with each dedicated to a specific data point. Right now it is all GPS data but we should add more info like battery_lvl,device_type
 
@@ -196,43 +149,7 @@ AT+GPS=38.8977,-77.0365
 
 **UPDATE SETTINGS**
 
-```text
-SET|<key>|<value>
-----
-AT+SET=name,DT45
-AT+SET=freq,915.0
-AT+SET=power,22
-AT+SET=maxret,2
-AT+SET=retryint,1000
-```
-
-Set bulk settings
-
-```text
-AT+SETA=name,NODE2;freq,915.0;power,22;maxret,2;retryint,1000
-```
-
----
-
-## Todos
-
-- Add reporting device -> Reaper Net with all connected PRN satilites. This will allow the interface to know, track, and provide detailed information abotu the sats it is using.
-- Add AT command to get a list of all satilite information (GPS attached, num of sats, list of PRN's)
-- Add AT command to get GPS location.
-- Move the satilite struct and sat map logic to the user interface.
-- The HeltecV3 has 2 cores. Build test firmeware with FreeRTOS so we can start deligating tasks and start multitasking.
-
-**FreeRTOS**
-The HeltecV3 has 2 cores that we can utilize. Until now, we have been running everything on the main core. We need to form a better plan for core usage and dedicate logic to other cores. Right now, there is a alot of blocking functionality and guess work w/finger crossing. Too much is relying on the retries.
-
-Core 1: 
-
-- LoRa Communication (TX/RX)
-
-Core 2:
-
-- AT Commands and Responses.
-- GPS Handling. 
+Coming Soon...
 
 ---
 
