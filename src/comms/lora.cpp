@@ -97,7 +97,7 @@ void retryFragments() {
         if (state == RADIOLIB_ERR_NONE) {
           frag.timestamp = millis();
           frag.retries++;
-          Serial.printf("SEND|RETRY|%s|%d|try=%d\n", it->first.c_str(),
+          Serial.printf("SEND|ATTEMPT|%s|%d|try=%d\n", it->first.c_str(),
                         (&frag - &it->second[0]), frag.retries);
         }
         lora.startReceive();
@@ -190,6 +190,7 @@ void handleIncoming(uint8_t *buf) {
     String mid(bufId);
     mid.toUpperCase();
     for (auto &frag : outgoing[mid]) frag.acked = true;
+    Serial.printf("ACK|CONFIRM|%s", mid.c_str());
   } else if (type == TYPE_ACK_FRAGMENT) {
     processAck(buf);
   }
