@@ -4,3 +4,4 @@
 
 void loadSettings();
 void saveSettings();
+void updateSetting(const char* key, const void* value);
