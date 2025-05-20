@@ -63,9 +63,9 @@ Note: This firmware is its own protocol and will not work to communicate with ot
 ### Supported Commands
 
 ```text
+AT+DEVICE?
 AT+MSG=YOUR MESSAGE HERE
-AT+DMSG=7065|Hello Node 7065. How are you today? // Note the prepended device_name at the beginning for direct messaging.
-AT+GPS=latitude,longitude
+AT+DMSG=7065|Hello Node 7065. How are you today?
 ```
 
 **EXAMPLES**
