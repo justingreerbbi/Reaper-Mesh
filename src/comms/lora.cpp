@@ -149,6 +149,7 @@ void handleIncoming(uint8_t *buf) {
         return;
       }
 
+      // Send ack_confirm back to the sender
       uint8_t ackConfirm[AES_BLOCK_LEN] = {0};
       ackConfirm[0] = TYPE_ACK_CONFIRM;
       ackConfirm[1] = buf[1];
@@ -161,11 +162,27 @@ void handleIncoming(uint8_t *buf) {
 
       String fullMessage;
       for (int i = 0; i < total; i++) fullMessage += msg.parts[i];
-      int sep = fullMessage.indexOf('|');
-      String sender = fullMessage.substring(0, sep);
-      String message = fullMessage.substring(sep + 1);
-      Serial.printf("RECV|%s|%s|%s\n", sender.c_str(), message.c_str(),
-                    msgId.c_str());
+      //Serial.println(fullMessage);
+
+      std::vector<String> parts;
+      int last = 0, next = 0;
+      while ((next = fullMessage.indexOf('|', last)) != -1) {
+        parts.push_back(fullMessage.substring(last, next));
+        last = next + 1;
+      }
+      parts.push_back(fullMessage.substring(last));
+
+      String msgType = parts[0];
+      String sender = parts[1];
+
+      if (msgType == "MSG") {
+        String message = parts[2];
+        Serial.printf("RECV|MSG|%s|%s|%s\n", sender.c_str(), message.c_str(), msgId.c_str());
+      } else if (msgType == "DMSG") {
+        String recipient = parts[2];
+        String message = parts[3];
+        Serial.printf("RECV|DMSG|%s|%s|%s|%s\n", sender.c_str(), recipient.c_str(), message.c_str(), msgId.c_str());
+      }
     }
   } else if (type == TYPE_ACK_CONFIRM) {
     char bufId[5];
