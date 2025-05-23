@@ -1,17 +1,23 @@
 #include "task_lora.h"
-
 #include "../comms/lora.h"
+#include "../comms/lora_defs.h"
 
-void taskLoRaHandler(void* param) {
+void taskLoRaHandler(void*){
+  static uint8_t buf[MAX_FRAGMENT_SIZE];
+
   while (true) {
-    uint8_t buf[MAX_FRAGMENT_SIZE];  // Use consistent max size
     int state = lora.receive(buf, sizeof(buf));
-    if (state == RADIOLIB_ERR_NONE) {
-      handleIncoming(buf, sizeof(buf));  // Fix: pass length
+
+    if (state == RADIOLIB_ERR_NONE) {          // ← 0 = success
+      size_t len = lora.getPacketLength();     // real number of bytes received
+      handleIncoming(buf, len);                // pass correct length
+    }
+    else if (state != RADIOLIB_ERR_RX_TIMEOUT) {
+      Serial.printf("RECV|ERR|%d\n", state);   // log only genuine errors
     }
 
-    sendMessages();
-    lora.startReceive();
-    vTaskDelay(10 / portTICK_PERIOD_MS);
+    lora.startReceive();                       // re-arm RX
+    sendMessages();                            // retries / outbound
+    vTaskDelay(5 / portTICK_PERIOD_MS);
   }
 }
