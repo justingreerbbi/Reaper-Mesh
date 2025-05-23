@@ -1,30 +1,39 @@
 #pragma once
-#include <Arduino.h>
-#include <RadioLib.h>
 
+#include <RadioLib.h>
 #include <map>
 #include <vector>
+#include <Arduino.h>
 
-#define AES_BLOCK_LEN 16
-#define FRAG_DATA_LEN 11
-#define TYPE_TEXT_FRAGMENT 0x03
-#define TYPE_ACK_FRAGMENT 0x04
-#define TYPE_ACK_CONFIRM 0x08
-#define PRIORITY_NORMAL 0x03
+#define TYPE_TEXT_FRAGMENT 0x01
+#define TYPE_ACK_FRAGMENT  0x02
+#define TYPE_ACK_CONFIRM   0x03
+#define PRIORITY_NORMAL    0x00
+
+#define LORA_BANDWIDTH     500.0
+#define LORA_SPREADING_FACTOR 12
+#define LORA_CODING_RATE   8
+#define LORA_PREAMBLE_LENGTH 20
+#define LORA_SYNC_WORD     0xF3
+#define LORA_CRC           true
+
 #define BROADCAST_MEMORY_TIME 30000UL
+#define MAX_FRAGMENT_SIZE 200
+#define FRAG_HEADER_SIZE 5
+#define FRAG_DATA_LEN (MAX_FRAGMENT_SIZE - FRAG_HEADER_SIZE)
 
 struct Fragment {
-  uint8_t data[AES_BLOCK_LEN];
+  uint8_t data[MAX_FRAGMENT_SIZE];
+  uint8_t length;  // actual payload length
+  bool acked;
   int retries;
   unsigned long timestamp;
-  bool acked = false;
 };
 
 struct IncomingText {
-  int total;
-  unsigned long start;
-  std::map<uint8_t, String> parts;
+  uint8_t total;
   std::vector<bool> received;
+  std::map<uint8_t, String> parts;
 };
 
 extern SX1262 lora;
@@ -32,11 +41,10 @@ extern std::map<String, std::vector<Fragment>> outgoing;
 extern std::map<String, IncomingText> incoming;
 
 void initLoRa(float freq, int txPower);
-void handleIncoming(uint8_t *buf);
-void sendMessages();
-void processAck(uint8_t *buf);
 String generateMsgID();
-void encryptFragment(uint8_t *b);
-void decryptFragment(uint8_t *b);
 bool isRecentMessage(const String &msgId);
+void encryptFragment(uint8_t *b, size_t len);
+void decryptFragment(uint8_t *b, size_t len);
+void sendMessages();
+void handleIncoming(uint8_t *buf, size_t len);
 void sendBeacon();

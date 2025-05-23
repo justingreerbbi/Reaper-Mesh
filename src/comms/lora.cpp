@@ -2,20 +2,20 @@
 
 #include <AES.h>
 #include <Crypto.h>
-
 #include "../config.h"
 #include "../gps/gps.h"
 
 AES128 aes;
-uint8_t aes_key[16] = {0x60, 0x3D, 0xEB, 0x10, 0x15, 0xCA, 0x71, 0xBE,
-                       0x2B, 0x73, 0xAE, 0xF0, 0x85, 0x7D, 0x77, 0x81};
+uint8_t aes_key[16] = {
+  0x60, 0x3D, 0xEB, 0x10, 0x15, 0xCA, 0x71, 0xBE,
+  0x2B, 0x73, 0xAE, 0xF0, 0x85, 0x7D, 0x77, 0x81
+};
 
 SX1262 lora = new Module(8, 14, 12, 13);
 std::map<String, std::vector<Fragment>> outgoing;
 std::map<String, IncomingText> incoming;
 std::map<String, unsigned long> recentMsgs;
 
-// Initialize the LoRa module with the given frequency and transmission power.
 void initLoRa(float freq, int txPower) {
   aes.setKey(aes_key, sizeof(aes_key));
   int state = lora.begin(freq);
@@ -24,9 +24,6 @@ void initLoRa(float freq, int txPower) {
     while (1);
   }
 
-  // Set LoRa parameters. For now, we use a set of hard coded parameters to keep
-  // the system simple. These can be changed later to allow for more flexibility
-  // but for now, we will keep it simple and use a set of hard coded parameters.
   lora.setBandwidth(LORA_BANDWIDTH);
   lora.setSpreadingFactor(LORA_SPREADING_FACTOR);
   lora.setCodingRate(LORA_CODING_RATE);
@@ -37,17 +34,12 @@ void initLoRa(float freq, int txPower) {
   lora.startReceive();
 }
 
-// Generate a random message ID
-// The ID is a 4-digit hexadecimal number, generated using esp_random().
 String generateMsgID() {
   char buf[7];
   snprintf(buf, sizeof(buf), "%04X", (uint16_t)esp_random());
   return String(buf);
 }
 
-// Check if the message ID is recent.
-// If it is, return true. Otherwise, add it to the recent messages map and
-// return false.
 bool isRecentMessage(const String &msgId) {
   unsigned long now = millis();
   for (auto it = recentMsgs.begin(); it != recentMsgs.end();) {
@@ -61,13 +53,16 @@ bool isRecentMessage(const String &msgId) {
   return false;
 }
 
-void encryptFragment(uint8_t *b) { aes.encryptBlock(b, b); }
-void decryptFragment(uint8_t *b) { aes.decryptBlock(b, b); }
+void encryptFragment(uint8_t *b, size_t len) {
+  for (size_t i = 0; i < len; i += 16) aes.encryptBlock(b + i, b + i);
+}
 
-// Process the ACK fragment.
-// This function is called when an ACK fragment is received.
+void decryptFragment(uint8_t *b, size_t len) {
+  for (size_t i = 0; i < len; i += 16) aes.decryptBlock(b + i, b + i);
+}
+
 void processAck(uint8_t *buf) {
-  decryptFragment(buf);
+  decryptFragment(buf, MAX_FRAGMENT_SIZE);
   if (buf[0] != TYPE_ACK_FRAGMENT) return;
   String msgId = String((buf[1] << 8) | buf[2], HEX);
   uint8_t seq = buf[3];
@@ -83,18 +78,20 @@ void sendMessages() {
     bool allAcked = true;
     for (auto &frag : it->second) {
       if (frag.acked || frag.retries >= 2) continue;
+
       unsigned long start = millis();
       while (millis() - start < 500) {
-        uint8_t buf[128];
+        uint8_t buf[MAX_FRAGMENT_SIZE];
         int state = lora.receive(buf, sizeof(buf));
         if (state == RADIOLIB_ERR_NONE) {
-          decryptFragment(buf);
+          decryptFragment(buf, MAX_FRAGMENT_SIZE);
           processAck(buf);
         }
         if (frag.acked) break;
       }
+
       if (!frag.acked) {
-        int state = lora.transmit(frag.data, AES_BLOCK_LEN);
+        int state = lora.transmit(frag.data, frag.length);
         if (state == RADIOLIB_ERR_NONE) {
           frag.timestamp = millis();
           frag.retries++;
@@ -113,8 +110,8 @@ void sendMessages() {
   }
 }
 
-void handleIncoming(uint8_t *buf) {
-  decryptFragment(buf);
+void handleIncoming(uint8_t *buf, size_t len) {
+  decryptFragment(buf, len);
   uint8_t type = buf[0] & 0x0F;
 
   if (type == TYPE_TEXT_FRAGMENT) {
@@ -123,7 +120,7 @@ void handleIncoming(uint8_t *buf) {
     uint8_t seq = buf[3];
     uint8_t total = buf[4];
     String part;
-    for (int i = 5; i < AES_BLOCK_LEN; i++) {
+    for (int i = 5; i < len; i++) {
       if (buf[i] == 0x00) break;
       part += (char)buf[i];
     }
@@ -151,20 +148,18 @@ void handleIncoming(uint8_t *buf) {
         return;
       }
 
-      // Send ack_confirm back to the sender
-      uint8_t ackConfirm[AES_BLOCK_LEN] = {0};
+      uint8_t ackConfirm[MAX_FRAGMENT_SIZE] = {0};
       ackConfirm[0] = TYPE_ACK_CONFIRM;
       ackConfirm[1] = buf[1];
       ackConfirm[2] = buf[2];
       ackConfirm[3] = buf[3];
-      encryptFragment(ackConfirm);
-      lora.transmit(ackConfirm, AES_BLOCK_LEN);
+      encryptFragment(ackConfirm, MAX_FRAGMENT_SIZE);
+      lora.transmit(ackConfirm, MAX_FRAGMENT_SIZE);
       delay(50);
       lora.startReceive();
 
       String fullMessage;
       for (int i = 0; i < total; i++) fullMessage += msg.parts[i];
-      // Serial.println(fullMessage);
 
       std::vector<String> parts;
       int last = 0, next = 0;
@@ -179,13 +174,11 @@ void handleIncoming(uint8_t *buf) {
 
       if (msgType == "MSG") {
         String message = parts[2];
-        Serial.printf("RECV|MSG|%s|%s|%s\n", sender.c_str(), message.c_str(),
-                      msgId.c_str());
+        Serial.printf("RECV|MSG|%s|%s|%s\n", sender.c_str(), message.c_str(), msgId.c_str());
       } else if (msgType == "DMSG") {
         String recipient = parts[2];
         String message = parts[3];
-        Serial.printf("RECV|DMSG|%s|%s|%s|%s\n", sender.c_str(),
-                      recipient.c_str(), message.c_str(), msgId.c_str());
+        Serial.printf("RECV|DMSG|%s|%s|%s|%s\n", sender.c_str(), recipient.c_str(), message.c_str(), msgId.c_str());
       } else if (msgType == "BEACON") {
         Serial.print("RECV|");
         Serial.println(fullMessage);
@@ -208,36 +201,37 @@ void handleIncoming(uint8_t *buf) {
 void sendBeacon() {
   String msg;
   ReaperGPSData data = getGPSData();
-  msg = data.latitude;
-  msg += "," + String(data.longitude);
-  msg += "," + String(data.altitude);
-  msg += "," + String(data.speed);
-  msg += "," + String(data.course);
-  msg += "," + String(data.satellites);
+  msg = String(data.latitude, 6) + "," +
+        String(data.longitude, 6) + "," +
+        String(data.altitude, 2) + "," +
+        String(data.speed, 2) + "," +
+        String(data.course) + "," +
+        String(data.satellites);
   msg = "BEACON|" + String(settings.deviceName) + "|" + msg;
+
   String msgId = generateMsgID();
   std::vector<Fragment> frags;
   int total = (msg.length() + FRAG_DATA_LEN - 1) / FRAG_DATA_LEN;
+
   for (int i = 0; i < total; i++) {
-    uint8_t block[AES_BLOCK_LEN] = {0};
-    block[0] = PRIORITY_NORMAL;
-    block[1] = (uint8_t)(strtoul(msgId.c_str(), NULL, 16) >> 8);
-    block[2] = (uint8_t)(strtoul(msgId.c_str(), NULL, 16) & 0xFF);
-    block[3] = i;
-    block[4] = total;
+    Fragment frag = {};
+    frag.data[0] = TYPE_TEXT_FRAGMENT;
+    frag.data[1] = (uint8_t)(strtoul(msgId.c_str(), NULL, 16) >> 8);
+    frag.data[2] = (uint8_t)(strtoul(msgId.c_str(), NULL, 16) & 0xFF);
+    frag.data[3] = i;
+    frag.data[4] = total;
 
-    String chunk = msg.substring(
-        i * FRAG_DATA_LEN, min((i + 1) * FRAG_DATA_LEN, (int)msg.length()));
-    memcpy(&block[5], chunk.c_str(), chunk.length());
+    String chunk = msg.substring(i * FRAG_DATA_LEN, min((i + 1) * FRAG_DATA_LEN, (int)msg.length()));
+    memcpy(&frag.data[5], chunk.c_str(), chunk.length());
 
-    encryptFragment(block);
-    Fragment frag;
-    memcpy(frag.data, block, AES_BLOCK_LEN);
+    frag.length = chunk.length() + 5;
+    encryptFragment(frag.data, frag.length);
     frag.retries = 0;
     frag.timestamp = millis();
     frag.acked = false;
+    lora.transmit(frag.data, frag.length);
     frags.push_back(frag);
-    lora.transmit(block, AES_BLOCK_LEN);
   }
+
   outgoing[msgId] = frags;
 }

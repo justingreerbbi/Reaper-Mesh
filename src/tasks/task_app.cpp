@@ -15,14 +15,12 @@ void taskAppHandler(void* param) {
       String in = Serial.readStringUntil('\n');
       in.trim();
 
-      // Check if the incoming message is the device prompt AT command.
-      // AT+DEVICE.
       if (in.startsWith("AT+DEVICE?")) {
-        Serial.println("HELTEC|READY|" + String(settings.deviceName));
-        continue;  // Break
+        Serial.println("REAPER_NODE|READY|" + String(settings.deviceName));
+        continue;
       }
 
-      // Send a group message. MSG|<device_name>|<message>
+      // AT+MSG=<message>
       if (in.startsWith("AT+MSG=")) {
         String msg = in.substring(7);
         if (isTransmitting) continue;
@@ -34,34 +32,29 @@ void taskAppHandler(void* param) {
         int total = (msg.length() + FRAG_DATA_LEN - 1) / FRAG_DATA_LEN;
 
         for (int i = 0; i < total; i++) {
-          uint8_t block[AES_BLOCK_LEN] = {0};
-          block[0] = PRIORITY_NORMAL;
-          block[1] = (uint8_t)(strtoul(msgId.c_str(), NULL, 16) >> 8);
-          block[2] = (uint8_t)(strtoul(msgId.c_str(), NULL, 16) & 0xFF);
-          block[3] = i;
-          block[4] = total;
+          Fragment frag = {};
+          frag.data[0] = TYPE_TEXT_FRAGMENT;
+          frag.data[1] = (uint8_t)(strtoul(msgId.c_str(), NULL, 16) >> 8);
+          frag.data[2] = (uint8_t)(strtoul(msgId.c_str(), NULL, 16) & 0xFF);
+          frag.data[3] = i;
+          frag.data[4] = total;
 
-          String chunk =
-              msg.substring(i * FRAG_DATA_LEN,
-                            min((i + 1) * FRAG_DATA_LEN, (int)msg.length()));
-          memcpy(&block[5], chunk.c_str(), chunk.length());
+          String chunk = msg.substring(i * FRAG_DATA_LEN, min((i + 1) * FRAG_DATA_LEN, (int)msg.length()));
+          memcpy(&frag.data[5], chunk.c_str(), chunk.length());
 
-          encryptFragment(block);
-          Fragment frag;
-          memcpy(frag.data, block, AES_BLOCK_LEN);
+          frag.length = chunk.length() + 5;
+          encryptFragment(frag.data, frag.length);
           frag.retries = 0;
           frag.timestamp = millis();
           frag.acked = false;
           frags.push_back(frag);
-          lora.transmit(block, AES_BLOCK_LEN);
         }
 
         outgoing[msgId] = frags;
         isTransmitting = false;
       }
 
-      // Send a direct message to a node
-      // DMSG|<device_name>|<to_device_name>|<message>|<msgID>
+      // AT+DMSG=<to_device>|<message>
       if (in.startsWith("AT+DMSG=")) {
         String msg = in.substring(8);
         if (isTransmitting) continue;
@@ -73,65 +66,60 @@ void taskAppHandler(void* param) {
         int total = (msg.length() + FRAG_DATA_LEN - 1) / FRAG_DATA_LEN;
 
         for (int i = 0; i < total; i++) {
-          uint8_t block[AES_BLOCK_LEN] = {0};
-          block[0] = PRIORITY_NORMAL;
-          block[1] = (uint8_t)(strtoul(msgId.c_str(), NULL, 16) >> 8);
-          block[2] = (uint8_t)(strtoul(msgId.c_str(), NULL, 16) & 0xFF);
-          block[3] = i;
-          block[4] = total;
+          Fragment frag = {};
+          frag.data[0] = TYPE_TEXT_FRAGMENT;
+          frag.data[1] = (uint8_t)(strtoul(msgId.c_str(), NULL, 16) >> 8);
+          frag.data[2] = (uint8_t)(strtoul(msgId.c_str(), NULL, 16) & 0xFF);
+          frag.data[3] = i;
+          frag.data[4] = total;
 
-          String chunk =
-              msg.substring(i * FRAG_DATA_LEN,
-                            min((i + 1) * FRAG_DATA_LEN, (int)msg.length()));
-          memcpy(&block[5], chunk.c_str(), chunk.length());
+          String chunk = msg.substring(i * FRAG_DATA_LEN, min((i + 1) * FRAG_DATA_LEN, (int)msg.length()));
+          memcpy(&frag.data[5], chunk.c_str(), chunk.length());
 
-          encryptFragment(block);
-          Fragment frag;
-          memcpy(frag.data, block, AES_BLOCK_LEN);
+          frag.length = chunk.length() + 5;
+          encryptFragment(frag.data, frag.length);
           frag.retries = 0;
           frag.timestamp = millis();
           frag.acked = false;
           frags.push_back(frag);
-          lora.transmit(block, AES_BLOCK_LEN);
         }
 
         outgoing[msgId] = frags;
         isTransmitting = false;
       }
 
+      // AT+GPS?
       if (in.startsWith("AT+GPS?")) {
         if (isTransmitting) continue;
         ReaperGPSData data = getGPSData();
-        Serial.printf("GPS|%.6f,%.6f,%.1f,%.1f,%.1f,%d\n", data.latitude,
-                      data.longitude, data.altitude, data.speed, data.course,
-                      data.satellites);
+        Serial.printf("GPS|%.6f,%.6f,%.1f,%.1f,%.1f,%d\n",
+                      data.latitude, data.longitude,
+                      data.altitude, data.speed,
+                      data.course, data.satellites);
         isTransmitting = false;
       }
 
+      // AT+BEACON
       if (in.startsWith("AT+BEACON")) {
         if (isTransmitting) continue;
         isTransmitting = true;
         sendBeacon();
         isTransmitting = false;
       }
-
-    }  // END OF INCOMING STATEMENT
+    }
 
     unsigned long now = millis();
     if (!startupBeaconSent) {
       // sendBeacon();
-      // Serial.println("LOG|BEACON_SENT");
       startupBeaconSent = true;
       lastBeacon = now;
     } else if (now - lastBeacon >= settings.beaconInterval && !isTransmitting) {
-      // Serial.println("LOG|BEACON_SENT");
       // sendBeacon();
       lastBeacon = now;
     }
 
     updateGPS();
 
-    // Report the gps if the device is not transmitting.
     if (!isTransmitting) {
       printGPSDataIfChanged();
     }

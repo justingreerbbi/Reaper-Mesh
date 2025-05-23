@@ -91,6 +91,17 @@ AT+GPS?
 -   Ability to load channel and keys via SD card (requires hardware development).
 -   BLE connectivity with custom mobile application.
 
+## Know Issues
+
+- [] Messages are capped by legacy code. We need to remove the restriction for the firmware for long message and file support.
+- [] Need a better handshale protocol for ACK_CONFIRM. Poke up to x times if no ACK is sent.
+- [] Better handling when a message is sending. We can't have other things happening. I think it is interfering with logic.
+- [] It would be nice to know is a RECV is a msg or beacon. This was we can handle icoming messages better on the UI of Reaper Net.
+- [] We need to add device name to ACK_CONFIRM so Reaper Net can track who got the message and who did not.
+- [] Add mesh networking support for messhing. THIS IS A MUST.
+- [X] Beacon needs to send more acrruate lat and lng.
+
+
 ---
 
 ## How to use
