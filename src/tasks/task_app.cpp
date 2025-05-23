@@ -15,8 +15,6 @@ void taskAppHandler(void* param) {
       String in = Serial.readStringUntil('\n');
       in.trim();
 
-      // Check if the incoming message is the device prompt AT command.
-      // AT+DEVICE.
       if (in.startsWith("AT+DEVICE?")) {
         Serial.println("HELTEC|READY|" + String(settings.deviceName));
         continue;  // Break
@@ -133,9 +131,9 @@ void taskAppHandler(void* param) {
 
     // Report the gps if the device is not transmitting.
     if (!isTransmitting) {
-      printGPSDataIfChanged();
+      // printGPSDataIfChanged();
     }
 
-    vTaskDelay(10 / portTICK_PERIOD_MS);
+    vTaskDelay(5 / portTICK_PERIOD_MS);
   }
 }

@@ -4,14 +4,16 @@
 
 void taskLoRaHandler(void* param) {
   while (true) {
-    uint8_t buf[128];
+    uint8_t buf[200];
     int state = lora.receive(buf, sizeof(buf));
     if (state == RADIOLIB_ERR_NONE) {
       handleIncoming(buf);
     }
 
+    // @todo: Maybe only do this ever 5 seconds or so? Not sure how that will
+    // affect the system.
     sendMessages();
     lora.startReceive();
-    vTaskDelay(10 / portTICK_PERIOD_MS);
+    vTaskDelay(5 / portTICK_PERIOD_MS);
   }
 }
