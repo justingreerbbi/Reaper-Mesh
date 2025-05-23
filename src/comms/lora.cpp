@@ -4,18 +4,29 @@
 #include "../gps/gps.h"
 #include "lora_defs.h"
 
+// ── Radio instance
+// ────────────────────────────────────────────────────────────
 SX1262 lora = new Module(8, 14, 12, 13);
-std::map<String, std::vector<Fragment>> outgoing;
-std::map<String, IncomingText> incoming;
-std::map<String, uint32_t> recentMsgs;
 
-String generateMsgID() {
+// ── Message tracking containers
+// ───────────────────────────────────────────────
+std::map<String, std::vector<Fragment>> outgoing;  // msg‑id  ➜ fragments
+std::map<String, IncomingText> incoming;           // msg‑id  ➜ partial rx
+std::map<String, uint32_t> recentMsgs;             // msg‑id  ➜ timestamp
+
+static unsigned long lastSendTime = 0;  // global inter-fragment pacing
+
+// ── Helpers
+// ───────────────────────────────────────────────────────────────────
+// ── Helpers
+// ───────────────────────────────────────────────────────────────────
+String generateMsgID() {  // <- no “static”
   char buf[7];
   snprintf(buf, sizeof(buf), "%04X", (uint16_t)esp_random());
   return String(buf);
 }
 
-bool isRecentMessage(const String& id) {
+bool isRecentMessage(const String& id) {  // <- no “static”
   uint32_t now = millis();
   for (auto it = recentMsgs.begin(); it != recentMsgs.end();) {
     if (now - it->second > BROADCAST_MEMORY_TIME)
@@ -28,10 +39,18 @@ bool isRecentMessage(const String& id) {
   return false;
 }
 
+static inline void sendAckConfirm(uint8_t msb, uint8_t lsb) {
+  uint8_t pkt[3] = {TYPE_ACK_CONFIRM, msb, lsb};  // 1‑byte type + 2‑byte id
+  lora.transmit(pkt, sizeof(pkt));
+  lora.startReceive();
+}
+
+// ── Radio initialisation
+// ──────────────────────────────────────────────────────
 void initLoRa(float freq, int txPower) {
   if (lora.begin(freq) != RADIOLIB_ERR_NONE) {
     Serial.println("ERR|LORA_INIT");
-    while (true) {
+    while (true) { /* halt */
     }
   }
   lora.setBandwidth(LORA_BANDWIDTH);
@@ -44,16 +63,21 @@ void initLoRa(float freq, int txPower) {
   lora.startReceive();
 }
 
+// ── Outgoing queue builder
+// ────────────────────────────────────────────────────
 void queueMessage(const String& type, const String& payload) {
-  String msg = type + "|" + String(settings.deviceName) + "|" + payload;
-  String id = generateMsgID();
-  uint8_t total = (msg.length() + FRAG_DATA_LEN - 1) / FRAG_DATA_LEN;
+  const String msg = type + "|" + String(settings.deviceName) + "|" + payload;
+  const String id = generateMsgID();
 
+  const uint8_t total = (msg.length() + FRAG_DATA_LEN - 1) / FRAG_DATA_LEN;
   std::vector<Fragment> frags;
+  frags.reserve(total);
+
+  const uint16_t id16 = strtoul(id.c_str(), nullptr, 16);
+
   for (uint8_t seq = 0; seq < total; ++seq) {
     Fragment f{};
     f.data[0] = TYPE_TEXT_FRAGMENT;
-    uint16_t id16 = strtoul(id.c_str(), nullptr, 16);
     f.data[1] = id16 >> 8;
     f.data[2] = id16 & 0xFF;
     f.data[3] = seq;
@@ -68,86 +92,101 @@ void queueMessage(const String& type, const String& payload) {
     f.length = chunk.length() + FRAG_HEADER_SIZE;
     f.retries = 0;
     f.timestamp = 0;
-    f.acked = false;
     frags.push_back(f);
   }
-  outgoing[id] = frags;
+  outgoing[id] = std::move(frags);
 }
 
+// ── Transmission scheduler
+// ────────────────────────────────────────────────────
 void sendMessages() {
-  for (const auto& pair : outgoing) {
-    Serial.printf("OUTGOING|ID=%s|FRAGS=%d\n", pair.first.c_str(),
-                  (int)pair.second.size());
-    for (size_t i = 0; i < pair.second.size(); ++i) {
-      const Fragment& fr = pair.second[i];
-      Serial.printf("  SEQ=%d|LEN=%d|ACK=%d|RETRIES=%d\n", (int)i,
-                    (int)fr.length, fr.acked, fr.retries);
-    }
-  }
-  vTaskDelay(3000 / portTICK_PERIOD_MS);
-  return;
+  const unsigned long RETRY_DELAY_MS = 2000;
+  const unsigned long INTER_FRAGMENT_DELAY = 2000;
 
-  for (auto it = outgoing.begin(); it != outgoing.end();) {
-    bool allAcked = true;
+  if (millis() - lastSendTime < INTER_FRAGMENT_DELAY) {
+    return;  // don't send anything yet — global pacing
+  }
+
+  for (auto it = outgoing.begin(); it != outgoing.end();
+       /* ++ handled below */) {
+    const String& id = it->first;
+    bool allFragmentsRetried = true;
+    bool allAckedOrFailed = true;
 
     for (auto& fr : it->second) {
-      if (fr.acked || fr.retries >= settings.maxRetries) continue;
+      if (fr.acked) continue;
+      if (fr.retries >= 2) continue;
 
-      if (fr.retries == 0 ||
-          (millis() - fr.timestamp >= settings.retryInterval)) {
+      if (millis() - fr.timestamp >= RETRY_DELAY_MS) {
         int result = lora.transmit(fr.data, fr.length);
         fr.retries++;
         fr.timestamp = millis();
+        lastSendTime = millis();  // pace next transmission globally
 
         if (result == RADIOLIB_ERR_NONE) {
-          Serial.printf("SEND|%s|%d/%d|try=%d\n", it->first.c_str(),
+          Serial.printf("SEND|%s|%d/%d|try=%d\n", id.c_str(),
                         (&fr - &it->second[0]) + 1, (int)it->second.size(),
                         fr.retries);
         } else {
-          Serial.printf("SEND|FAIL|%s|SEQ=%d|ERR=%d\n", it->first.c_str(),
+          Serial.printf("SEND|FAIL|%s|SEQ=%d|ERR=%d\n", id.c_str(),
                         (&fr - &it->second[0]), result);
         }
 
         lora.startReceive();
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        return;  // exit early to honor inter-fragment delay
       }
 
-      if (!fr.acked && fr.retries >= settings.maxRetries) {
-        Serial.printf("SEND_FAILED|%s\n", it->first.c_str());
+      if (!fr.acked && fr.retries < settings.maxRetries) {
+        allAckedOrFailed = false;
+        allFragmentsRetried = false;
+      } else if (!fr.acked) {
+        Serial.printf("SEND_FAILED|%s|SEQ=%d\n", id.c_str(),
+                      (&fr - &it->second[0]));
       }
-
-      if (!fr.acked) allAcked = false;
     }
 
-    if (allAcked) {
-      it = outgoing.erase(it);
+    if (allAckedOrFailed) {
+      if (!std::all_of(it->second.begin(), it->second.end(),
+                       [](const Fragment& f) { return f.acked; })) {
+        Serial.printf("SEND_FAILED|FINAL|%s\n", id.c_str());
+      }
+      it = outgoing.erase(it);  // done with this message
     } else {
       ++it;
     }
   }
 }
 
+// ── ACK‑CONFIRM handler
+// ───────────────────────────────────────────────────────
 void processAck(uint8_t* buf, size_t len) {
-  if (len < 4 || buf[0] != TYPE_ACK_FRAGMENT) return;
+  if (len < 3 || buf[0] != TYPE_ACK_CONFIRM) return;
 
   String id = String((buf[1] << 8) | buf[2], HEX);
-  uint8_t seq = buf[3];
+  id.toUpperCase();
+
   auto it = outgoing.find(id);
-  if (it != outgoing.end() && seq < it->second.size()) {
-    it->second[seq].acked = true;
-    Serial.printf("ACK|%s|SEQ=%d\n", id.c_str(), seq);
+  if (it != outgoing.end()) {
+    Serial.printf("ACK_CONFIRM|%s\n", id.c_str());
+    outgoing.erase(it);
   }
 }
 
+// ── Packet dispatcher
+// ─────────────────────────────────────────────────────────
 void handleIncoming(uint8_t* buf, size_t len) {
   if (len < FRAG_HEADER_SIZE) return;
 
-  uint8_t type = buf[0] & 0x0F;
+  const uint8_t type = buf[0] & 0x0F;
 
+  // ── TEXT FRAGMENT ─────────────────────────────────────────────────────────
   if (type == TYPE_TEXT_FRAGMENT) {
     String id = String((buf[1] << 8) | buf[2], HEX);
     id.toUpperCase();
-    uint8_t seq = buf[3], total = buf[4], plen = buf[5];
+
+    const uint8_t seq = buf[3];
+    const uint8_t total = buf[4];
+    const uint8_t plen = buf[5];
     if (seq >= total || plen + FRAG_HEADER_SIZE > len) return;
 
     IncomingText& msg = incoming[id];
@@ -160,32 +199,34 @@ void handleIncoming(uint8_t* buf, size_t len) {
     msg.received[seq] = true;
     Serial.printf("RECV|FRAG|%s|%d/%d\n", id.c_str(), seq + 1, total);
 
-    // Send ACK fragment back
-    uint8_t ack[16] = {TYPE_ACK_FRAGMENT, buf[1], buf[2], buf[3]};
-    lora.transmit(ack, 16);
-    lora.startReceive();
-
+    // All fragments received?
     if (std::all_of(msg.received.begin(), msg.received.end(),
                     [](bool b) { return b; })) {
-      if (isRecentMessage(id)) {
+      if (isRecentMessage(id)) {  // duplicate – discard
         incoming.erase(id);
         return;
       }
 
       String full;
       for (uint8_t i = 0; i < total; ++i) full += msg.parts[i];
-
       Serial.printf("RECV|FULL|%s\n", full.c_str());
-      incoming.erase(id);
+
+      // Send one ACK_CONFIRM back to the sender
+      sendAckConfirm(buf[1], buf[2]);
+
+      incoming.erase(id);  // tidy up
     }
     return;
   }
 
-  if (type == TYPE_ACK_FRAGMENT) {
+  // ── ACK‑CONFIRM ───────────────────────────────────────────────────────────
+  if (type == TYPE_ACK_CONFIRM) {
     processAck(buf, len);
   }
 }
 
+// ── Beacon helper
+// ─────────────────────────────────────────────────────────────
 void sendBeacon() {
   ReaperGPSData g = getGPSData();
   String payload = String(g.latitude, 6) + "," + String(g.longitude, 6) + "," +
