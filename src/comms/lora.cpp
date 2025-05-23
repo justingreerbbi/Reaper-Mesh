@@ -208,8 +208,8 @@ void handleIncoming(uint8_t *buf) {
 void sendBeacon() {
   String msg;
   ReaperGPSData data = getGPSData();
-  msg = data.latitude;
-  msg += "," + String(data.longitude);
+  msg = String(data.latitude, 6);
+  msg += "," + String(data.longitude, 6);
   msg += "," + String(data.altitude);
   msg += "," + String(data.speed);
   msg += "," + String(data.course);
