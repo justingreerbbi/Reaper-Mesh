@@ -1,7 +1,8 @@
 #include "lora.h"
-#include "lora_defs.h"
+
 #include "../config.h"
 #include "../gps/gps.h"
+#include "lora_defs.h"
 
 SX1262 lora = new Module(8, 14, 12, 13);
 std::map<String, std::vector<Fragment>> outgoing;
@@ -30,7 +31,8 @@ bool isRecentMessage(const String& id) {
 void initLoRa(float freq, int txPower) {
   if (lora.begin(freq) != RADIOLIB_ERR_NONE) {
     Serial.println("ERR|LORA_INIT");
-    while (true) {}
+    while (true) {
+    }
   }
   lora.setBandwidth(LORA_BANDWIDTH);
   lora.setSpreadingFactor(LORA_SPREADING_FACTOR);
@@ -57,7 +59,9 @@ void queueMessage(const String& type, const String& payload) {
     f.data[3] = seq;
     f.data[4] = total;
 
-    String chunk = msg.substring(seq * FRAG_DATA_LEN, std::min((seq + 1) * FRAG_DATA_LEN, (int)msg.length()));
+    String chunk =
+        msg.substring(seq * FRAG_DATA_LEN,
+                      std::min((seq + 1) * FRAG_DATA_LEN, (int)msg.length()));
     f.data[5] = chunk.length();
     memcpy(&f.data[6], chunk.c_str(), chunk.length());
 
@@ -71,23 +75,37 @@ void queueMessage(const String& type, const String& payload) {
 }
 
 void sendMessages() {
+  for (const auto& pair : outgoing) {
+    Serial.printf("OUTGOING|ID=%s|FRAGS=%d\n", pair.first.c_str(),
+                  (int)pair.second.size());
+    for (size_t i = 0; i < pair.second.size(); ++i) {
+      const Fragment& fr = pair.second[i];
+      Serial.printf("  SEQ=%d|LEN=%d|ACK=%d|RETRIES=%d\n", (int)i,
+                    (int)fr.length, fr.acked, fr.retries);
+    }
+  }
+  vTaskDelay(3000 / portTICK_PERIOD_MS);
+  return;
+
   for (auto it = outgoing.begin(); it != outgoing.end();) {
     bool allAcked = true;
 
     for (auto& fr : it->second) {
       if (fr.acked || fr.retries >= settings.maxRetries) continue;
 
-      if (fr.retries == 0 || (millis() - fr.timestamp >= settings.retryInterval)) {
+      if (fr.retries == 0 ||
+          (millis() - fr.timestamp >= settings.retryInterval)) {
         int result = lora.transmit(fr.data, fr.length);
         fr.retries++;
         fr.timestamp = millis();
 
         if (result == RADIOLIB_ERR_NONE) {
           Serial.printf("SEND|%s|%d/%d|try=%d\n", it->first.c_str(),
-            (&fr - &it->second[0]) + 1, (int)it->second.size(), fr.retries);
+                        (&fr - &it->second[0]) + 1, (int)it->second.size(),
+                        fr.retries);
         } else {
-          Serial.printf("SEND|FAIL|%s|SEQ=%d|ERR=%d\n",
-            it->first.c_str(), (&fr - &it->second[0]), result);
+          Serial.printf("SEND|FAIL|%s|SEQ=%d|ERR=%d\n", it->first.c_str(),
+                        (&fr - &it->second[0]), result);
         }
 
         lora.startReceive();
@@ -143,19 +161,19 @@ void handleIncoming(uint8_t* buf, size_t len) {
     Serial.printf("RECV|FRAG|%s|%d/%d\n", id.c_str(), seq + 1, total);
 
     // Send ACK fragment back
-    uint8_t ack[16] = { TYPE_ACK_FRAGMENT, buf[1], buf[2], buf[3] };
+    uint8_t ack[16] = {TYPE_ACK_FRAGMENT, buf[1], buf[2], buf[3]};
     lora.transmit(ack, 16);
     lora.startReceive();
 
-    if (std::all_of(msg.received.begin(), msg.received.end(), [](bool b) { return b; })) {
+    if (std::all_of(msg.received.begin(), msg.received.end(),
+                    [](bool b) { return b; })) {
       if (isRecentMessage(id)) {
         incoming.erase(id);
         return;
       }
 
       String full;
-      for (uint8_t i = 0; i < total; ++i)
-        full += msg.parts[i];
+      for (uint8_t i = 0; i < total; ++i) full += msg.parts[i];
 
       Serial.printf("RECV|FULL|%s\n", full.c_str());
       incoming.erase(id);
@@ -170,11 +188,8 @@ void handleIncoming(uint8_t* buf, size_t len) {
 
 void sendBeacon() {
   ReaperGPSData g = getGPSData();
-  String payload = String(g.latitude, 6) + "," +
-                   String(g.longitude, 6) + "," +
-                   String(g.altitude, 2) + "," +
-                   String(g.speed, 2) + "," +
-                   String(g.course) + "," +
-                   String(g.satellites);
+  String payload = String(g.latitude, 6) + "," + String(g.longitude, 6) + "," +
+                   String(g.altitude, 2) + "," + String(g.speed, 2) + "," +
+                   String(g.course) + "," + String(g.satellites);
   queueMessage("BEACON", payload);
 }

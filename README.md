@@ -65,6 +65,7 @@ Note: This firmware is its own protocol and will not work to communicate with ot
 ```text
 AT+DEVICE?
 AT+MSG=YOUR MESSAGE HERE
+AT+MSG=This is a test message designed to demonstrate long message support in the firmware. It is exactly 100 characters.
 AT+DMSG=7065|Hello Node 7065. How are you today?
 AT+BEACON
 AT+GPS?
@@ -93,14 +94,13 @@ AT+GPS?
 
 ## Know Issues
 
-- [] Messages are capped by legacy code. We need to remove the restriction for the firmware for long message and file support.
-- [] Need a better handshale protocol for ACK_CONFIRM. Poke up to x times if no ACK is sent.
-- [] Better handling when a message is sending. We can't have other things happening. I think it is interfering with logic.
-- [] It would be nice to know is a RECV is a msg or beacon. This was we can handle icoming messages better on the UI of Reaper Net.
-- [] We need to add device name to ACK_CONFIRM so Reaper Net can track who got the message and who did not.
-- [] Add mesh networking support for messhing. THIS IS A MUST.
-- [X] Beacon needs to send more acrruate lat and lng.
-
+-   [] Messages are capped by legacy code. We need to remove the restriction for the firmware for long message and file support.
+-   [] Need a better handshale protocol for ACK_CONFIRM. Poke up to x times if no ACK is sent.
+-   [] Better handling when a message is sending. We can't have other things happening. I think it is interfering with logic.
+-   [] It would be nice to know is a RECV is a msg or beacon. This was we can handle icoming messages better on the UI of Reaper Net.
+-   [] We need to add device name to ACK_CONFIRM so Reaper Net can track who got the message and who did not.
+-   [] Add mesh networking support for messhing. THIS IS A MUST.
+-   [x] Beacon needs to send more acrruate lat and lng.
 
 ---
 
