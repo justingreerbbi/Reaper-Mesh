@@ -1,75 +1,141 @@
 #include "task_app.h"
 
-#include "../comms/lora.h"        // queueMessage / sendBeacon
+#include "../comms/lora.h"
 #include "../gps/gps.h"
 #include "../system/settings.h"
 
 extern bool isTransmitting;
-static bool startupBeaconSent = false;
+bool startupBeaconSent = false;
 
-void taskAppHandler(void* /*param*/) {
-  uint32_t lastBeacon = 0;
+void taskAppHandler(void* param) {
+  unsigned long lastBeacon = 0;
 
   while (true) {
-    /* ───────────── UART COMMANDS ───────────── */
     if (Serial.available()) {
       String in = Serial.readStringUntil('\n');
       in.trim();
 
-      /* Device prompt */
+      // Check if the incoming message is the device prompt AT command.
+      // AT+DEVICE.
       if (in.startsWith("AT+DEVICE?")) {
-        Serial.println("NODE|READY|" + String(settings.deviceName));
-        continue;
+        Serial.println("HELTEC|READY|" + String(settings.deviceName));
+        continue;  // Break
       }
 
-      /* Group message ------------------------------------------------------- */
+      // Send a group message. MSG|<device_name>|<message>
       if (in.startsWith("AT+MSG=")) {
-        String text = in.substring(7);
-        queueMessage("MSG", text);          // << use high-level API
-        continue;
+        String msg = in.substring(7);
+        if (isTransmitting) continue;
+        isTransmitting = true;
+
+        msg = "MSG|" + String(settings.deviceName) + "|" + msg;
+        String msgId = generateMsgID();
+        std::vector<Fragment> frags;
+        int total = (msg.length() + FRAG_DATA_LEN - 1) / FRAG_DATA_LEN;
+
+        for (int i = 0; i < total; i++) {
+          uint8_t block[AES_BLOCK_LEN] = {0};
+          block[0] = PRIORITY_NORMAL;
+          block[1] = (uint8_t)(strtoul(msgId.c_str(), NULL, 16) >> 8);
+          block[2] = (uint8_t)(strtoul(msgId.c_str(), NULL, 16) & 0xFF);
+          block[3] = i;
+          block[4] = total;
+
+          String chunk =
+              msg.substring(i * FRAG_DATA_LEN,
+                            min((i + 1) * FRAG_DATA_LEN, (int)msg.length()));
+          memcpy(&block[5], chunk.c_str(), chunk.length());
+
+          encryptFragment(block);
+          Fragment frag;
+          memcpy(frag.data, block, AES_BLOCK_LEN);
+          frag.retries = 0;
+          frag.timestamp = millis();
+          frag.acked = false;
+          frags.push_back(frag);
+          lora.transmit(block, AES_BLOCK_LEN);
+        }
+
+        outgoing[msgId] = frags;
+        isTransmitting = false;
       }
 
-      /* Direct message ------------------------------------------------------ */
+      // Send a direct message to a node
+      // DMSG|<device_name>|<to_device_name>|<message>|<msgID>
       if (in.startsWith("AT+DMSG=")) {
-        String remainder = in.substring(8); // "<to>|<msg>"
-        queueMessage("DMSG", remainder);
-        continue;
+        String msg = in.substring(8);
+        if (isTransmitting) continue;
+        isTransmitting = true;
+
+        msg = "DMSG|" + String(settings.deviceName) + "|" + msg;
+        String msgId = generateMsgID();
+        std::vector<Fragment> frags;
+        int total = (msg.length() + FRAG_DATA_LEN - 1) / FRAG_DATA_LEN;
+
+        for (int i = 0; i < total; i++) {
+          uint8_t block[AES_BLOCK_LEN] = {0};
+          block[0] = PRIORITY_NORMAL;
+          block[1] = (uint8_t)(strtoul(msgId.c_str(), NULL, 16) >> 8);
+          block[2] = (uint8_t)(strtoul(msgId.c_str(), NULL, 16) & 0xFF);
+          block[3] = i;
+          block[4] = total;
+
+          String chunk =
+              msg.substring(i * FRAG_DATA_LEN,
+                            min((i + 1) * FRAG_DATA_LEN, (int)msg.length()));
+          memcpy(&block[5], chunk.c_str(), chunk.length());
+
+          encryptFragment(block);
+          Fragment frag;
+          memcpy(frag.data, block, AES_BLOCK_LEN);
+          frag.retries = 0;
+          frag.timestamp = millis();
+          frag.acked = false;
+          frags.push_back(frag);
+          lora.transmit(block, AES_BLOCK_LEN);
+        }
+
+        outgoing[msgId] = frags;
+        isTransmitting = false;
       }
 
-      /* GPS request --------------------------------------------------------- */
-      if (in == "AT+GPS?") {
-        ReaperGPSData d = getGPSData();
-        Serial.printf("GPS|%.6f,%.6f,%.1f,%.1f,%.1f,%d\n",
-                      d.latitude, d.longitude, d.altitude,
-                      d.speed, d.course, d.satellites);
-        continue;
+      if (in.startsWith("AT+GPS?")) {
+        if (isTransmitting) continue;
+        ReaperGPSData data = getGPSData();
+        Serial.printf("GPS|%.6f,%.6f,%.1f,%.1f,%.1f,%d\n", data.latitude,
+                      data.longitude, data.altitude, data.speed, data.course,
+                      data.satellites);
+        isTransmitting = false;
       }
 
-      /* Manual beacon ------------------------------------------------------- */
       if (in.startsWith("AT+BEACON")) {
+        if (isTransmitting) continue;
+        isTransmitting = true;
         sendBeacon();
-        continue;
+        isTransmitting = false;
       }
-    }
 
-    /* ───────────── periodic work ───────────── */
-    uint32_t now = millis();
+    }  // END OF INCOMING STATEMENT
 
+    unsigned long now = millis();
     if (!startupBeaconSent) {
-      // optional initial beacon
       // sendBeacon();
+      // Serial.println("LOG|BEACON_SENT");
       startupBeaconSent = true;
       lastBeacon = now;
-    }
-    else if (settings.beaconEnabled &&
-             now - lastBeacon >= settings.beaconInterval) {
-      //sendBeacon();
+    } else if (now - lastBeacon >= settings.beaconInterval && !isTransmitting) {
+      // Serial.println("LOG|BEACON_SENT");
+      // sendBeacon();
       lastBeacon = now;
     }
 
     updateGPS();
-    //printGPSDataIfChanged();
 
-    vTaskDelay(5 / portTICK_PERIOD_MS);
+    // Report the gps if the device is not transmitting.
+    if (!isTransmitting) {
+      printGPSDataIfChanged();
+    }
+
+    vTaskDelay(10 / portTICK_PERIOD_MS);
   }
 }
