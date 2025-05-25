@@ -12,6 +12,8 @@
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, RST_OLED_PIN);
 bool isTransmitting = false;
 
+extern void taskNRF24Handler(void*);
+
 void setup() {
   Serial.begin(115200);
   while (!Serial);
@@ -24,6 +26,7 @@ void setup() {
 
   xTaskCreatePinnedToCore(taskLoRaHandler, "LoRaTask", 4096, NULL, 1, NULL, 1);
   xTaskCreatePinnedToCore(taskAppHandler, "AppTask", 8192, NULL, 1, NULL, 0);
+  xTaskCreatePinnedToCore(taskNRF24Handler,"NRF24Task",4096, NULL,1,NULL, 1); // Run on core 1 with LoRa????
 }
 
 void loop() {}

@@ -37,6 +37,12 @@
 #define LORA_SYNC_WORD 0xF3
 #define LORA_CRC true
 
+#define NRF_CE_PIN   13
+#define NRF_CSN_PIN  12
+#define NRF_SCK_PIN   9
+#define NRF_MOSI_PIN 10
+#define NRF_MISO_PIN 11
+
 struct Settings {
   char deviceName[16];
   float frequency;
