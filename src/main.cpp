@@ -34,6 +34,7 @@ void setup() {
   radio.setPALevel(RF24_PA_MIN);
   radio.stopListening();
 
+  delay(1000);  // Allow time for the radio to initialize
   const char text[] = "Hello NRF24!";
   if (radio.write(&text, sizeof(text))) {
     Serial.println("NRF|INFO|SEND_OK");
