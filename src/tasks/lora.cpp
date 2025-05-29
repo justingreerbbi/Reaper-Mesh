@@ -22,9 +22,15 @@ std::map<String, IncomingText> incoming;
 std::map<String, unsigned long> recentMsgs;
 std::set<String> confirmedMsgs;
 
+// Messaging Settings
 bool isTransmitting = false;
 int retryAttemptLimit = 3;
 std::map<String, unsigned long> lastRetryAttempt;
+
+// Beacon Settings/ Manual for the time being.
+bool beaconEnabled = true;
+unsigned long beaconIntervalMs = 5 * 60 * 1000UL; // 5 minutes default
+unsigned long lastBeaconTime = 0;
 
 void encryptFragment(uint8_t *b) { aes.encryptBlock(b, b); }
 void decryptFragment(uint8_t *b) { aes.decryptBlock(b, b); }
@@ -290,7 +296,15 @@ void taskLoRaHandler(void* param) {
       handleIncoming(buf);
     }
 
+    // Run the send messages function to process outgoing messages if any.
     sendMessages();
+
+    // Handle timed beacon
+    if (beaconEnabled && millis() - lastBeaconTime > beaconIntervalMs) {
+      sendBeacon();
+      lastBeaconTime = millis();
+    }
+
     vTaskDelay(5 / portTICK_PERIOD_MS);
   }
 }
