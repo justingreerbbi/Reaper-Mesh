@@ -69,9 +69,11 @@ AT+DMSG=7065|Hello Node 7065. How are you today? This a bit of a long message.
 AT+BEACON
 AT+GPS?
 ```
-
+Testing
+```text
 Long Message Test
 AT+MSG=Lorem ipsum dolor sit amet, consectetur adipiscing elit. Pellentesque euismod, nisi eu consectetur cursus, enim erat dictum urna, nec dictum enim enim nec urna. Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia curae; Etiam euismod, enim nec dictum dictum, enim erat dictum urna, nec dictum enim enim nec urna. Vestibulum ante ipsum primis in faucibus orci luctus.
+```
 
 ---
 
@@ -96,10 +98,6 @@ AT+MSG=Lorem ipsum dolor sit amet, consectetur adipiscing elit. Pellentesque eui
 
 ---
 
-## How to use
-
-In the works...
-
 ### BASIC MESSAGE STRUCTURE
 
 Given the need to keep the code as clean as possible, I am changing up how different message types are going to be sent. This way we can use one method to send encrypted messages while still being to tell other devices, what we are sending.
@@ -108,15 +106,13 @@ Transmissions can be the following:
 
 1. MSG:
 2. BEACON:
-3. REQ:
+3. DMSG:
 
 When sending a text message simply append the appropriate type in the beginning of the message field. This will tell the other devices what type of message this is.
 
 -   MSG:This is a normal text message and should be treated as such.
 -   BEACON:lat,lng,alt,speed,direction,sat_num
--   REQ:BEACON
-
-Note: BEACON will contain a set number of "," with each dedicated to a specific data point. Right now it is all GPS data but we should add more info like battery_lvl,device_type
+-   DMSG:TO|FROM|MSG|MSGID
 
 ## Installation
 
@@ -150,9 +146,25 @@ AT+MSG=!THIS IS A HIGH PRIORITY MESSAGE
 AT+GPS=38.8977,-77.0365
 ```
 
-**UPDATE SETTINGS**
+Commands sent that tranmit will result in an immediate response back from the Reaper Node. Below is an example of sending
+global message, followed by the response back from the Reaper Node.
 
-Coming Soon...
+-> AT+MSG=Hellow World
+<- SENDING|MSGID|<MsgId>
+<- SEND|FRAG|C16D|1/6|try=1
+<- SEND|FRAG|C16D|2/6|try=1
+<- SEND|FRAG|C16D|3/6|try=1
+<- SEND|FRAG|C16D|4/6|try=1
+<- SEND|FRAG|C16D|5/6|try=1
+<- SEND|FRAG|C16D|6/6|try=1
+<- ACK|CONFIRM|C16D
+
+The Reaper Node will respond with the Message ID that will be fragmented and broadcasted. For smaller messages this is quick
+but this allows for monitoring by an application for larger messages. The node will present the current fragment being broadcasted
+giving the status/progress of the send. Application can tap into the responses and show a progress bar if they choose to do so.
+
+After the intial broadcast completion, the node will wait a few seconds to listen back for any node that acknolodes it. If it does
+not hear back, the node will sttempt to retry the entire broadcast again. The index of the current try/retry in at the end of the response.
 
 ---
 
