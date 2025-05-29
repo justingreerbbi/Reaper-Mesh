@@ -34,3 +34,4 @@ bool isRecentMessage(const String &msgId);
 void sendBeacon();
 void taskLoRaHandler(void* param);
 void processMessageToOutgoing(String msg);
+void sendAckConfirmMessage(const String &msgId);

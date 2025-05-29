@@ -65,7 +65,7 @@ Note: This firmware is its own protocol and will not work to communicate with ot
 ```text
 AT+DEVICE?
 AT+MSG=YOUR MESSAGE HERE
-AT+DMSG=7065|Hello Node 7065. How are you today?
+AT+DMSG=7065|Hello Node 7065. How are you today? This a bit of a long message.
 AT+BEACON
 AT+GPS?
 ```
