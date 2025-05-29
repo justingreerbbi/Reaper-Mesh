@@ -1,17 +1,10 @@
 #pragma once
 #include <Arduino.h>
 #include <RadioLib.h>
+#include "../config.h"
 
 #include <map>
 #include <vector>
-
-#define AES_BLOCK_LEN 16
-#define FRAG_DATA_LEN 11
-#define TYPE_TEXT_FRAGMENT 0x03
-#define TYPE_ACK_FRAGMENT 0x04
-#define TYPE_ACK_CONFIRM 0x08
-#define PRIORITY_NORMAL 0x03
-#define BROADCAST_MEMORY_TIME 30000UL
 
 struct Fragment {
   uint8_t data[AES_BLOCK_LEN];
@@ -39,3 +32,5 @@ void encryptFragment(uint8_t *b);
 void decryptFragment(uint8_t *b);
 bool isRecentMessage(const String &msgId);
 void sendBeacon();
+void taskLoRaHandler(void* param);
+void processMessageToOutgoing(String msg);

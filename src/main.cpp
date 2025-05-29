@@ -1,17 +1,17 @@
 #include <Adafruit_SSD1306.h>
 #include <Arduino.h>
-
-#include "comms/lora.h"
 #include "config.h"
 #include "gps/gps.h"
 #include "system/display.h"
 #include "system/settings.h"
-#include "tasks/task_app.h"
-#include "tasks/task_lora.h"
+#include "tasks/app.h"
+#include "tasks/lora.h"
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, RST_OLED_PIN);
-bool isTransmitting = false;
 
+/**
+ * MAIN APP ENTRY POINT
+ */
 void setup() {
   Serial.begin(115200);
   while (!Serial);

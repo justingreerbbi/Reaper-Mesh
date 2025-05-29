@@ -2,9 +2,14 @@
 
 #include <AES.h>
 #include <Crypto.h>
+#include <RadioLib.h>
+#include <map>
+#include <vector>
+#include <Arduino.h>
 
-#include "../config.h"
 #include "../gps/gps.h"
+#include "../system/settings.h"
+#include  "../config.h"
 
 AES128 aes;
 uint8_t aes_key[16] = {0x60, 0x3D, 0xEB, 0x10, 0x15, 0xCA, 0x71, 0xBE,
@@ -14,6 +19,20 @@ SX1262 lora = new Module(8, 14, 12, 13);
 std::map<String, std::vector<Fragment>> outgoing;
 std::map<String, IncomingText> incoming;
 std::map<String, unsigned long> recentMsgs;
+
+bool isTransmitting = false;
+int retryAttemptLimit = 3;
+
+void encryptFragment(uint8_t *b) { aes.encryptBlock(b, b); }
+void decryptFragment(uint8_t *b) { aes.decryptBlock(b, b); }
+
+// Generate a random message ID
+// The ID is a 4-digit hexadecimal number, generated using esp_random().
+String generateMsgID() {
+  char buf[7];
+  snprintf(buf, sizeof(buf), "%04X", (uint16_t)esp_random());
+  return String(buf);
+}
 
 // Initialize the LoRa module with the given frequency and transmission power.
 void initLoRa(float freq, int txPower) {
@@ -37,14 +56,6 @@ void initLoRa(float freq, int txPower) {
   lora.startReceive();
 }
 
-// Generate a random message ID
-// The ID is a 4-digit hexadecimal number, generated using esp_random().
-String generateMsgID() {
-  char buf[7];
-  snprintf(buf, sizeof(buf), "%04X", (uint16_t)esp_random());
-  return String(buf);
-}
-
 // Check if the message ID is recent.
 // If it is, return true. Otherwise, add it to the recent messages map and
 // return false.
@@ -60,9 +71,6 @@ bool isRecentMessage(const String &msgId) {
   recentMsgs[msgId] = now;
   return false;
 }
-
-void encryptFragment(uint8_t *b) { aes.encryptBlock(b, b); }
-void decryptFragment(uint8_t *b) { aes.decryptBlock(b, b); }
 
 // Handle all incoming messages.
 // At this point, we do not know what was sent to us, so we will need to
@@ -223,15 +231,15 @@ void handleIncoming(uint8_t *buf) {
 // This functions is called in the main.cpp file if we ever want to modify how
 // and when it gets called.
 void sendMessages() {
+  if(isTransmitting) return;
+  isTransmitting = true;
+
+  // Start loop through the outgoing messages/fragments.
   for (auto it = outgoing.begin(); it != outgoing.end();) {
     bool allAcked = true;
     for (auto &frag : it->second) {
-      // If the fragment is acked or the retires are greater than the retries
-      // settings, bail. We don;t want to keep sending the same message over and
-      // over.
-      // @todo: We need to incorporate the retry settings into the settings
-      // file.
-      if (frag.acked || frag.retries >= 2) {
+
+      if (frag.acked || frag.retries >= retryAttemptLimit) {
         continue;
       }
 
@@ -254,6 +262,8 @@ void sendMessages() {
     else
       ++it;
   }
+  isTransmitting = false;
+  lora.startReceive(); // Just in case?
 }
 
 // Send a beacon maesage.
@@ -270,9 +280,17 @@ void sendBeacon() {
   msg += "," + String(data.course);
   msg += "," + String(data.satellites);
   msg = "BEACON|" + String(settings.deviceName) + "|" + msg;
+  processMessageToOutgoing(msg);
+}
+
+/**
+ * Process a message to the outgoing messages.
+ */
+void processMessageToOutgoing(String msg) {
   String msgId = generateMsgID();
   std::vector<Fragment> frags;
   int total = (msg.length() + FRAG_DATA_LEN - 1) / FRAG_DATA_LEN;
+
   for (int i = 0; i < total; i++) {
     uint8_t block[AES_BLOCK_LEN] = {0};
     block[0] = PRIORITY_NORMAL;
@@ -282,17 +300,42 @@ void sendBeacon() {
     block[4] = total;
 
     String chunk = msg.substring(
-        i * FRAG_DATA_LEN, min((i + 1) * FRAG_DATA_LEN, (int)msg.length()));
-    memcpy(&block[5], chunk.c_str(), chunk.length());
+      i * FRAG_DATA_LEN,
+      min((i + 1) * FRAG_DATA_LEN, (int)msg.length())
+    );
 
+    memset(&block[5], 0, AES_BLOCK_LEN - 5);
+    memcpy(&block[5], chunk.c_str(), chunk.length());
     encryptFragment(block);
+
     Fragment frag;
     memcpy(frag.data, block, AES_BLOCK_LEN);
     frag.retries = 0;
     frag.timestamp = millis();
     frag.acked = false;
+
     frags.push_back(frag);
-    lora.transmit(block, AES_BLOCK_LEN);
   }
+
   outgoing[msgId] = frags;
+}
+
+
+/**
+ * TASK HANDLER FOR LoRa
+ */
+void taskLoRaHandler(void* param) {
+  while (true) {
+    uint8_t buf[200];
+    int state = lora.receive(buf, sizeof(buf));
+    if (state == RADIOLIB_ERR_NONE) {
+      handleIncoming(buf);
+    }
+
+    // @todo: Maybe only do this ever 5 seconds or so? Not sure how that will
+    // affect the system.
+    sendMessages();
+    lora.startReceive();
+    vTaskDelay(5 / portTICK_PERIOD_MS);
+  }
 }

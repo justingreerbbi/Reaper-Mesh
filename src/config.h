@@ -14,8 +14,8 @@
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 
-#define AES_BLOCK_LEN 16
-#define FRAG_DATA_LEN 11
+#define AES_BLOCK_LEN 20
+#define FRAG_DATA_LEN 15
 
 #define TYPE_TEXT_FRAGMENT 0x03  // 3
 #define TYPE_ACK_FRAGMENT 0x04   // 4

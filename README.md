@@ -70,6 +70,9 @@ AT+BEACON
 AT+GPS?
 ```
 
+Long Message Test
+AT+MSG=Lorem ipsum dolor sit amet, consectetur adipiscing elit. Pellentesque euismod, nisi eu consectetur cursus, enim erat dictum urna, nec dictum enim enim nec urna. Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia curae; Etiam euismod, enim nec dictum dictum, enim erat dictum urna, nec dictum enim enim nec urna. Vestibulum ante ipsum primis in faucibus orci luctus.
+
 ---
 
 ## Features
