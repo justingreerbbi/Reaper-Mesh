@@ -151,12 +151,12 @@ global message, followed by the response back from the Reaper Node.
 
 -> AT+MSG=Hellow World
 <- SENDING|MSGID|<MsgId>
-<- SEND|FRAG|C16D|1/6|try=1
-<- SEND|FRAG|C16D|2/6|try=1
-<- SEND|FRAG|C16D|3/6|try=1
-<- SEND|FRAG|C16D|4/6|try=1
-<- SEND|FRAG|C16D|5/6|try=1
-<- SEND|FRAG|C16D|6/6|try=1
+<- SEND|FRAG|C16D|1/6|1/3
+<- SEND|FRAG|C16D|2/6|1/3
+<- SEND|FRAG|C16D|3/6|1/3
+<- SEND|FRAG|C16D|4/6|1/3
+<- SEND|FRAG|C16D|5/6|1/3
+<- SEND|FRAG|C16D|6/6|1/3
 <- ACK|CONFIRM|C16D
 
 The Reaper Node will respond with the Message ID that will be fragmented and broadcasted. For smaller messages this is quick

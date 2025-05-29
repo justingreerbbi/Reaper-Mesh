@@ -24,6 +24,7 @@ std::set<String> confirmedMsgs;
 
 bool isTransmitting = false;
 int retryAttemptLimit = 3;
+std::map<String, unsigned long> lastRetryAttempt;
 
 void encryptFragment(uint8_t *b) { aes.encryptBlock(b, b); }
 void decryptFragment(uint8_t *b) { aes.decryptBlock(b, b); }
@@ -66,7 +67,6 @@ bool isRecentMessage(const String &msgId) {
 }
 
 void sendAckConfirmMessage(const String &msgId) {
-  Serial.printf("SEND|ACK_CONFIRM|%s\n", msgId.c_str());
   uint8_t ackConfirm[AES_BLOCK_LEN] = {0};
   ackConfirm[0] = TYPE_ACK_CONFIRM;
   ackConfirm[1] = (uint8_t)(strtoul(msgId.c_str(), NULL, 16) >> 8);
@@ -158,53 +158,65 @@ void sendMessages() {
   if (isTransmitting) return;
   isTransmitting = true;
 
+  unsigned long now = millis();
   for (auto it = outgoing.begin(); it != outgoing.end();) {
     const String& msgId = it->first;
 
     // Skip if already confirmed
     if (confirmedMsgs.find(msgId) != confirmedMsgs.end()) {
       it = outgoing.erase(it);
+      lastRetryAttempt.erase(msgId);  // Clean up retry tracker
+      continue;
+    }
+
+    // Skip if retry interval has not passed
+    if (lastRetryAttempt.count(msgId) && (now - lastRetryAttempt[msgId]) < MSG_RETRY_INTERVAL_MS) {
+      ++it;
       continue;
     }
 
     std::vector<Fragment>& fragments = it->second;
     bool didSend = false;
 
-    // Send all fragments once before listening for ACK_CONFIRM
     for (size_t i = 0; i < fragments.size(); ++i) {
       Fragment& frag = fragments[i];
-
-      // If max retries hit, skip sending
       if (frag.retries >= retryAttemptLimit) continue;
 
       int state = lora.transmit(frag.data, AES_BLOCK_LEN);
       if (state == RADIOLIB_ERR_NONE) {
-        frag.timestamp = millis();
+        frag.timestamp = now;
         frag.retries++;
-        Serial.printf("SEND|FRAG|%s|%d/%d|try=%d\n",
-          msgId.c_str(), static_cast<int>(i) + 1, static_cast<int>(fragments.size()), frag.retries);
+        Serial.printf("SEND|FRAG|%s|%d/%d|%d/%d\n",
+          msgId.c_str(), static_cast<int>(i) + 1, static_cast<int>(fragments.size()),
+          frag.retries, retryAttemptLimit);
         didSend = true;
       }
+
+      lora.startReceive();  // Re-enter receive mode after each fragment
+      vTaskDelay(10 / portTICK_PERIOD_MS);  // Short buffer time
     }
 
-    // After first full send, switch to receive mode
-    lora.startReceive();
+    // Update retry timer
+    if (didSend) {
+      lastRetryAttempt[msgId] = now;
+    }
 
-    // Wait for possible ACK_CONFIRM
+    // Check for ACK after sending all fragments
+    lora.startReceive();
     uint8_t buf[200];
     int state = lora.receive(buf, sizeof(buf));
     if (state == RADIOLIB_ERR_NONE) {
       handleIncoming(buf);
     }
 
-    // Clean up if ACK received
+    // Cleanup if message was confirmed
     if (confirmedMsgs.find(msgId) != confirmedMsgs.end()) {
       it = outgoing.erase(it);
+      lastRetryAttempt.erase(msgId);
     } else {
       ++it;
     }
   }
-
   isTransmitting = false;
   lora.startReceive();  // Ensure we stay in RX mode
 }
@@ -221,9 +233,12 @@ void sendBeacon() {
 
 void processMessageToOutgoing(String msg) {
   String msgId = generateMsgID();
-  Serial.printf("SENDING|MSGID|%s\n", msgId.c_str());
   std::vector<Fragment> frags;
   int total = (msg.length() + FRAG_DATA_LEN - 1) / FRAG_DATA_LEN;
+
+  // Report back to the serial the message id and the total number of fragments to be sent.
+  // This will help an application to track the message.
+  Serial.printf("SENDING|MSGID|%s|%d\n", msgId.c_str(), total);
 
   for (int i = 0; i < total; i++) {
     uint8_t block[AES_BLOCK_LEN] = {0};
