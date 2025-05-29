@@ -71,9 +71,17 @@ void sendAckConfirmMessage(const String &msgId) {
   ackConfirm[0] = TYPE_ACK_CONFIRM;
   ackConfirm[1] = (uint8_t)(strtoul(msgId.c_str(), NULL, 16) >> 8);
   ackConfirm[2] = (uint8_t)(strtoul(msgId.c_str(), NULL, 16) & 0xFF);
+
+  // Add |DeviceName after 3rd byte, truncated if needed
+  String suffix = "|" + String(settings.deviceName);
+  size_t maxLen = AES_BLOCK_LEN - 3;
+  size_t copyLen = min(suffix.length(), maxLen);
+  memcpy(&ackConfirm[3], suffix.c_str(), copyLen);
+
   encryptFragment(ackConfirm);
   lora.transmit(ackConfirm, AES_BLOCK_LEN);
 }
+
 
 void handleIncoming(uint8_t *buf) {
   decryptFragment(buf);
@@ -149,8 +157,18 @@ void handleIncoming(uint8_t *buf) {
     snprintf(bufId, sizeof(bufId), "%02X%02X", buf[1], buf[2]);
     String mId(bufId);
     mId.toUpperCase();
+
+    String devName = "UNKNOWN";
+    if (AES_BLOCK_LEN > 3) {
+      String tail = String((char *)&buf[3]);
+      int sepIdx = tail.indexOf('|');
+      if (sepIdx != -1 && sepIdx + 1 < (int)tail.length()) {
+        devName = tail.substring(sepIdx + 1);
+      }
+    }
+
     confirmedMsgs.insert(mId);
-    Serial.printf("ACK|CONFIRM|%s\n", mId.c_str());
+    Serial.printf("ACK|CONFIRM|%s|%s\n", mId.c_str(), devName.c_str());
   }
 }
 
